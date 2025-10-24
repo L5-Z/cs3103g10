@@ -40,13 +40,20 @@ import threading
 import time
 from typing import Callable, Optional, Tuple
 
-# Import our local modules explicitly (same directory)
 from header import (
-    HEADER_FMT, HEADER_SIZE,
     CHAN_RELIABLE, CHAN_UNRELIABLE, CHAN_ACK,
-    pack_header, unpack_header, now_ms, MAX_SEQ
+    pack_header, unpack_header, now_ms
 )
+
 from logger import Logger
+from reliable import (
+    ReliableSender,
+    ReliableReceiver,
+    pack_ack,
+    unpack_ack,
+    RttEstimator,
+)
+
 
 
 
