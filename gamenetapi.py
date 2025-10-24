@@ -35,17 +35,19 @@ Extra Details
   a minimal deadline proxy.
 
 """
-
 import socket
+import threading
+import time
 from typing import Callable, Optional, Tuple
 
-from .header import (
-    pack_header, unpack_header, CHAN_RELIABLE, CHAN_UNRELIABLE, CHAN_ACK, now_ms
+# Import our local modules explicitly (same directory)
+from header import (
+    HEADER_FMT, HEADER_SIZE,
+    CHAN_RELIABLE, CHAN_UNRELIABLE, CHAN_ACK,
+    pack_header, unpack_header, now_ms, MAX_SEQ
 )
-from .reliable import (
-    ReliableSender, ReliableReceiver, pack_ack, unpack_ack, RttEstimator
-)
-from .logger import Logger
+from logger import Logger
+
 
 
 class GameNetAPI:
