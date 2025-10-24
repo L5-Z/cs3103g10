@@ -21,7 +21,9 @@ import struct
 import time
 import socket 
 import json    
-import random  
+import random
+from utilities import make_flags_byte, make_custom_header, make_payload, make_mock_game_data
+
 
 # struct format: unsigned char (B), unsigned short (H), unsigned int (I)
 HEADER_FMT = "!BHI"
@@ -181,22 +183,3 @@ def validate_checksum(src_ip, dest_ip, udp_header, payload):
     computed = compute_udp_checksum(src_ip, dest_ip, header_zeroed, payload)
 
     return received_checksum == computed
-
-
-def make_flags_byte(channel_type, latency):
-    """
-    channel_type 1 bit e.g. 0b00000001
-    latency 1 bit e.g. 0b00000010
-    """
-    return (latency << 1) | channel_type 
-
-def make_custom_header(flags, seq_no, timestamp):
-    """
-    flags 1B
-    seq_no 2B
-    timestamp 4B
-    """
-    return struct.pack('!BHI', flags, seq_no, timestamp)
-
-def make_payload(custom_header, mock_game_data):
-    return custom_header + mock_game_data
