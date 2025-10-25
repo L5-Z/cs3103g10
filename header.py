@@ -1,6 +1,20 @@
 """
 CS3103 Group 10 - Header Module
 H-UDP header packing/unpacking (transport-only)
+
+Header format (7 bytes total):
+  - ChannelType (1 byte): 0=reliable, 1=unreliable, 2=ack (control)
+  - SeqNo       (2 bytes, unsigned short; wraps at 65535)
+  - Timestamp   (4 bytes, unsigned int; milliseconds since epoch)
+
+Layout (network byte order, big-endian):
+
+    0        7 8      15 16                       47
+    +----------+----------+------------------------+
+    | ChanType |   SeqNo  |     Timestamp (ms)     |
+    +----------+----------+------------------------+
+    |                 Payload ...                  |
+    +----------------------------------------------+
 """
 from typing import Tuple
 import struct
