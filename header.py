@@ -41,23 +41,3 @@ def unpack_header(packet: bytes) -> Tuple[int, int, int, bytes]:
     payload = packet[HEADER_SIZE:]
     return channel, seq, ts, payload
 
-# Legacy helpers (removed). Fail fast if anything still calls them. 
-# Will be removed after proper testing 
-
-def checksum(*_args, **_kwargs):
-    raise RuntimeError("header.checksum removed; transport uses GameNetAPI")
-
-def compute_udp_checksum(*_args, **_kwargs):
-    raise RuntimeError("header.compute_udp_checksum removed; transport uses GameNetAPI")
-
-def make_packet(*_args, **_kwargs):
-    raise RuntimeError("header.make_packet removed; transport uses GameNetAPI")
-
-def validate_checksum(*_args, **_kwargs):
-    raise RuntimeError("header.validate_checksum removed; transport uses GameNetAPI")
-
-def unpack_packet(*_args, **_kwargs):
-    raise RuntimeError("header.unpack_packet removed; use GameNetAPI callbacks")
-
-def unpack_payload(*_args, **_kwargs):
-    raise RuntimeError("header.unpack_payload removed; app payload lives in utilities")
