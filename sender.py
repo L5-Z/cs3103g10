@@ -6,18 +6,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", required=True, help="Receiver host")
     ap.add_argument("--port", type=int, required=True, help="Receiver port")
-    ap.add_argument("--duration", type=int, default=3000, help="Seconds to run")
-    ap.add_argument("--pps", type=int, default=40, help="Packets per second total")
+    ap.add_argument("--duration", type=int, default=30, help="Seconds to run")
+    ap.add_argument("--pps", type=int, default=20, help="Packets per second total")
     ap.add_argument("--reliable-ratio", type=float, default=0.5, help="Fraction sent on reliable channel")
     ap.add_argument("--log", default="logs/sender.csv", help="Sender-side transport log")
+    ap.add_argument("--verbose", action="store_true", help="Print send/ACK progress")
+    ap.add_argument("--print-every", type=int, default=20, help="Print a status line every N sends (when --verbose)")
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     api = GameNetAPI(sock, log_path=args.log)
     api.set_peer((args.host, args.port))
 
+    sent_total = 0
+    sent_rel = 0
+
     def on_ack(seq: int, rtt_ms: int):
-        pass 
+        # Print one-liner per ACK when verbose is on.
+        if args.verbose:
+            print(f"[ACK] seq={seq} rtt={rtt_ms}ms")
 
     api.set_callbacks(reliable_cb=None, unreliable_cb=None, ack_cb=on_ack)
     api.start()
@@ -32,14 +39,21 @@ def main():
             reliable = (random.random() < args.reliable_ratio)
             payload = make_mock_game_data(i)
             api.send(payload, reliable=reliable, urgency_ms=0)
-            i += 1
 
+            sent_total += 1
+            if reliable:
+                sent_rel += 1
+            if args.verbose and (sent_total % max(1, args.print_every) == 0):
+                rel_pct = 100.0 * sent_rel / max(1, sent_total)
+                print(f"[SEND] total={sent_total} reliable={sent_rel} ({rel_pct:.1f}%)")
+
+            i += 1
             next_send += interval
             sleep_for = next_send - time.time()
             if sleep_for > 0:
                 time.sleep(sleep_for)
             else:
-                next_send = time.time()  
+                next_send = time.time()
     finally:
         api.stop()
 
