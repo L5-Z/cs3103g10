@@ -184,6 +184,9 @@ class GameNetAPI:
         while self._running:
             try:
                 data, _addr = self.sock.recvfrom(self.max_recv_size)
+                if self.peer is None:
+                    # learn peer lazily on first packet (receiver side)
+                    self.peer = _addr
             except socket.timeout:
                 continue
             except OSError:
