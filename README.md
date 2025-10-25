@@ -1,11 +1,14 @@
 ## 1) Things We Added/Changed
 - Removed temporary/stub functions in header
-- Sender and Receiver now use **GameNetAPI** over one UDP socket
+- Removed crafting raw UDP packets and checksum by hand (Performed by OS now.)
+- Shifted responsibility of managing transport layer from receiver/sender.py into GameNetAPI, reliable.py + header.py + logger.py
+- Sender and Receiver now use **GameNetAPI** over one UDP socket.
 - Unified CSV logging via logger; add **exporter** for charts-latency.py
 - Run scripts to start receiver/sender and capture logs
 
 ## 2) Things That Are Missing
-- Reliable RX semantics: reordering buffer, in-order delivery, skip-after-t
+- Reliable Transport semantics: reordering buffer, in-order delivery, skip-after-t, etc.
+- For now, generate both text logs from sender.csv. RTT (needed for latency) is only recorded when ACKs are received, which happens on the sender side. receiver.csv doesn’t contain ACK-RX entries yet, so the exporter will write 0 lines if you use it for --mode receiver.
 
 ## 3) How To Test (Quickstart) & Expected Behavior
 
