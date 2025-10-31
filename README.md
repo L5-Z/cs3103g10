@@ -8,6 +8,7 @@
 
 ## 2) Things That Are Missing
 - Reliable Transport semantics: reordering buffer, in-order delivery, skip-after-t, etc.
+- Retransmission time (t = 200ms (To be implemented alongside the relaible transport semantics))
 - For now, generate both text logs from sender.csv. RTT (needed for latency) is only recorded when ACKs are received, which happens on the sender side. receiver.csv doesn’t contain ACK-RX entries yet, so the exporter will write 0 lines if you use it for --mode receiver.
 
 ## 3) How To Test (Quickstart) & Expected Behavior
