@@ -6,6 +6,30 @@ from typing import Callable, Optional, Tuple, Dict
 
 from header import pack_header, now_ms, CHAN_RELIABLE
 
+# 16-bit sequence space (from our 7B H-UDP header: SeqNo is uint16)
+MAX_SEQ  = 1 << 16
+HALF_SEQ = MAX_SEQ >> 1
+MASK16   = MAX_SEQ - 1
+
+def seq_eq(a: int, b: int) -> bool:
+    return ((a ^ b) & MASK16) == 0
+
+def seq_less(a: int, b: int) -> bool:
+    #True iff a comes before b in modulo-2^16 order."""
+    return ((b - a) & MASK16) < HALF_SEQ and not seq_eq(a, b)
+
+def seq_leq(a: int, b: int) -> bool:
+    return seq_eq(a, b) or seq_less(a, b)
+
+def seq_dist_fwd(a: int, b: int) -> int:
+    # Forward distance a->b in modulo-2^16."""
+    return (b - a) & MASK16
+
+def in_window(base: int, s: int, win: int) -> bool:
+    # Is s within (base, base+win] ahead (mod 2^16)?
+    d = seq_dist_fwd(base, s)
+    return 0 < d <= win
+
 class RttEstimator:
     # Keeps SRTT/RTTVAR; provides bounded RTO in ms.
     def __init__(self):
@@ -101,11 +125,53 @@ class ReliableSender:
                         rec["retries"] += 1
 
 class ReliableReceiver:
-    # ACKs every REL packet and delivers immediately.
+    # ACKs every REL packet; delivers in-order with a small reordering buffer.
     def __init__(self, deliver_cb: Callable[[bytes], None], send_ack_cb: Callable[[int, int], None]):
         self.deliver_cb = deliver_cb
         self.send_ack_cb = send_ack_cb
+        self.expected_seq: Optional[int] = None
+        self.buf: Dict[int, Tuple[bytes, int, int]] = {}            # Reordering buffer: seq -> (payload, send_ts_ms, arrival_ms)
+        self.max_buf = 1024                                         # Adjustable Buffer
+        self._lock = threading.Lock()                               # RX thread safety (GameNetAPI runs on a background thread)
 
-    def on_packet(self, seq: int, send_ts_ms: int, payload: bytes):
+    def _advance_expected(self) -> None:
+        # Move to next sequence number (modulo 2^16)
+        self.expected_seq = (self.expected_seq + 1) & MASK16  # type: ignore[operator]
+
+    def _drain_in_order(self) -> None:
+        # Deliver any buffered packets that have become contiguous.
+        while self.expected_seq in self.buf:
+            payload, _send_ts, _arr = self.buf.pop(self.expected_seq)
+            self.deliver_cb(payload)
+            self._advance_expected()
+
+    def on_packet(self, seq: int, send_ts_ms: int, payload: bytes) -> None:
+        # Always ACK immediately so sender RTT/RTO keeps working.
         self.send_ack_cb(seq, send_ts_ms)
-        self.deliver_cb(payload)
+        arrival = now_ms()
+
+        with self._lock:
+            # First packet: initialize expected_seq, deliver, then drain.
+            if self.expected_seq is None:
+                self.expected_seq = seq
+                self.deliver_cb(payload)
+                self._advance_expected()
+                self._drain_in_order()
+                return
+
+            # In-order arrival → deliver and drain.
+            if seq_eq(seq, self.expected_seq):
+                self.deliver_cb(payload)
+                self._advance_expected()
+                self._drain_in_order()
+                return
+
+            # Ahead-of-gap arrival → buffer if within window and not already buffered.
+            if seq_less(self.expected_seq, seq):
+                if seq not in self.buf and in_window(self.expected_seq, seq, self.max_buf):
+                    self.buf[seq] = (payload, send_ts_ms, arrival)
+                # else: too far ahead or duplicate in buffer then drop silently
+                return
+
+            # Behind/duplicate arrival already delivered; drop.
+            return
