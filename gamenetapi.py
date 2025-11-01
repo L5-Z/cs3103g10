@@ -84,10 +84,9 @@ class GameNetAPI:
 
         # channels
         self.reliable_sender: Optional[ReliableSender] = None
-        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack)
+        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event)
 
         # control
-        import threading
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
         self._running = False
 
@@ -230,4 +229,12 @@ class GameNetAPI:
                     if self.onAck:
                         self.onAck(seq, rtt_ms)
             # else: ignore unknown channel
+            
+    def _log_transport_event(self, ev: str, seq: int) -> None:
+        if not self.logger:
+            return
+        now = now_ms()
+        # Columns follow our existing CSV shape:
+        # [ts_now, DIR, CHAN, seq, ts_send, rtt_ms, -, action, -, size]
+        self.logger.write([now, "RX", "REL", seq, "", "", "", ev, "", 0])
 
