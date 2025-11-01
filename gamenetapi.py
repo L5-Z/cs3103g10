@@ -66,7 +66,9 @@ class GameNetAPI:
         peer: Optional[Tuple[str,int]] = None,
         log_path: Optional[str] = None,
         max_recv_size: int = 4096,
+        verbose: bool = False
     ):
+        self.verbose = verbose  
         self.sock = sock
         self.peer = peer  # must be set for sending & ACKs
         self.max_recv_size = max_recv_size
@@ -229,12 +231,13 @@ class GameNetAPI:
                     if self.onAck:
                         self.onAck(seq, rtt_ms)
             # else: ignore unknown channel
-            
+
     def _log_transport_event(self, ev: str, seq: int) -> None:
-        if not self.logger:
-            return
-        now = now_ms()
-        # Columns follow our existing CSV shape:
-        # [ts_now, DIR, CHAN, seq, ts_send, rtt_ms, -, action, -, size]
-        self.logger.write([now, "RX", "REL", seq, "", "", "", ev, "", 0])
+        # Always write to CSV if present
+        if self.logger:
+            now = now_ms()
+            self.logger.write([now, "RX", "REL", seq, "", "", "", ev, "", 0])
+        # Optionally mirror to console
+        if self.verbose:
+            print(f"[REL/{ev}] seq={seq}")
 

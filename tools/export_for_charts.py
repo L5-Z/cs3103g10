@@ -52,7 +52,7 @@ def _emit_receiver_lines(r, g) -> int:
         ts   = _get(row, "ts", "timestamp")
         tss  = _get(row, "ts_send")
         size = _get(row, "size")
-        act  = _get(row, "action").lower()
+        act  = _get(row, "action", "event").lower()
         if dir_ == "RX" and ch in ("REL", "UNREL"):
             g.write(f"[RECV] {ch} seq={seq} ts_send={tss} ts={ts} size={size}\n")
             written += 1
