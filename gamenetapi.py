@@ -86,15 +86,28 @@ class GameNetAPI:
         # RTT estimation (shared with reliable sender)
         self.rtt = RttEstimator()
 
+        # store adaptive-t config
+        self.k_rttvar = float(k_rttvar)
+        self.t_min_ms = int(t_min_ms)
+        self.t_max_ms = int(t_max_ms)
+        self.max_urgency_ms = int(max_urgency_ms)
+        
         # channels
         self.reliable_sender: Optional[ReliableSender] = None
         
-        # optionally pass deadline function down to receiver)
+        # optionally pass deadline function down to receiver
         self.reliable_receiver = ReliableReceiver(
             self._deliver_reliable,
-            self._send_ack,
-            gap_deadline_fn=self._compute_deadline_ms
+            self._send_ack
         )
+
+        # once we expose a setter in ReliableReceiver, hook it up safely:
+        if hasattr(self.reliable_receiver, "set_gap_deadline_fn"):
+            try:
+                self.reliable_receiver.set_gap_deadline_fn(self._compute_deadline_ms)
+            except Exception:
+                pass  # stay compatible even if method exists but signature differs
+
 
         # control
         import threading
@@ -204,9 +217,7 @@ class GameNetAPI:
         rttvar = self.rtt.rttvar
 
         if srtt is None or rttvar is None:
-            # cold start: use conservative defaults
-            srtt = 200.0
-            rttvar = 100.0
+            srtt, rttvar = 200.0, 100.0 # use defaults at the start
 
         k = self.k_rttvar
         u = max(0, min(int(urgency_ms), self.max_urgency_ms))
