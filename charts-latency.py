@@ -2,279 +2,247 @@
 CS3103 Group 10 - Log Analysis Script
 """
 
+# The script reads sender/receiver log files and plots latency, jitter and throughput.
+# It’s okay if the receiver log is empty (RTT is only in sender logs for now).
+
+import os
+import sys
+import csv
+import argparse
+import math
+from collections import defaultdict
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import re
-from datetime import datetime
-import statistics
 
-class SimpleLogAnalyzer:
-    def __init__(self, sender_log, receiver_log):
-        self.sender_log = sender_log
-        self.receiver_log = receiver_log
-        
-        self.sender_packets = []
-        self.receiver_packets = []
-        
-        # Metrics
-        self.reliable_latencies = []
-        self.unreliable_latencies = []
-        self.reliable_sent = 0
-        self.reliable_received = 0
-        self.unreliable_sent = 0
-        self.unreliable_received = 0
-        self.retransmissions = 0
-    
-    def parse_logs(self):
-        #Parse the log files
-        print("Parsing sender log...")
+PLOTS_DIR = "plots"
+os.makedirs(PLOTS_DIR, exist_ok=True)
+
+def log(msg):
+    print(msg, file=sys.stderr)
+
+# helpers for reading the log files 
+NUM_KEYS_LAT_MS = ("latency_ms", "rtt_ms", "one_way_ms")
+TIME_KEYS_MS = ("recv_time_ms", "ack_time_ms", "timestamp_ms", "time_ms", "ts_ms", "time")
+SEQ_KEYS = ("seq", "seqno", "sequence", "sequence_number")
+
+def _to_float_safe(v):
+    try:
+        if v is None or v == "":
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+def _try_read_csv_rows(path):
+    for delim in (",", "\t", " "):
         try:
-            with open(self.sender_log, 'r') as f:
-                for line in f:
-                    if 'SeqNo:' in line:
-                        seq = int(line.split('SeqNo:')[1].split()[0])
-                        channel = int(line.split('ChannelType:')[1].split()[0])
-                        
-                        if channel == 0:
-                            self.reliable_sent += 1
-                        else:
-                            self.unreliable_sent += 1
-                        
-                        if 'Retrans:1' in line:
-                            self.retransmissions += 1
-                        
-                        self.sender_packets.append({
-                            'seq': seq,
-                            'channel': channel
-                        })
-        except FileNotFoundError:
-            print(f"Warning: {self.sender_log} not found")
-        
-        print("Parsing receiver log...")
+            with open(path, "r", newline="") as f:
+                dr = csv.DictReader(f, delimiter=delim)
+                rows = [r for r in dr]
+                if rows and any(rows[0].keys()):
+                    return rows
+        except Exception:
+            continue
+    return None
+
+def _try_read_kv_lines(path):
+    rows = []
+    with open(path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.replace("=", " ").replace(":", " ").split()
+            d = {}
+            for i in range(0, len(parts) - 1, 2):
+                k, v = parts[i].lower(), parts[i + 1]
+                d[k] = v
+            if d:
+                rows.append(d)
+    return rows if rows else None
+
+def load_text_log(path):
+    if not path or not os.path.exists(path):
+        return []
+    rows = _try_read_csv_rows(path)
+    if rows:
+        return rows
+    rows = _try_read_kv_lines(path)
+    return rows or []
+
+def first_present(d, keys):
+    for k in keys:
+        if k in d and d[k] not in (None, "", "NA"):
+            return k
+    return None
+
+def fix_timestamp_units(v):
+    if v is None:
+        return None
+    try:
+        v = float(v)
+    except Exception:
+        return None
+    if v > 1e15:
+        return v / 1e6
+    if v > 1e12:
+        return v
+    if v > 1e9:
+        return v * 1000.0
+    return v
+
+def extract_series(rows):
+    send_ts_by_seq = {}
+    times_all = []
+
+    for idx, r in enumerate(rows):
+        t = fix_timestamp_units(r.get("ts_recv_ms"))
+        if t is not None:
+            times_all.append(t)
+
+        ev  = (r.get("event") or "").lower()
+        dir_ = (r.get("dir") or "").upper()
+        ch  = (r.get("channel") or "").upper()
+
+        s = r.get("seq")
         try:
-            with open(self.receiver_log, 'r') as f:
-                for line in f:
-                    if 'SeqNo:' in line and 'RTT:' in line:
-                        seq = int(line.split('SeqNo:')[1].split()[0])
-                        channel = int(line.split('ChannelType:')[1].split()[0])
-                        rtt = float(line.split('RTT:')[1].split('ms')[0])
-                        
-                        latency = rtt / 2
-                        
-                        if channel == 0:
-                            self.reliable_received += 1
-                            self.reliable_latencies.append(latency)
-                        else:
-                            self.unreliable_received += 1
-                            self.unreliable_latencies.append(latency)
-                        
-                        self.receiver_packets.append({
-                            'seq': seq,
-                            'channel': channel,
-                            'latency': latency
-                        })
-        except FileNotFoundError:
-            print(f"Warning: {self.receiver_log} not found")
-    
-    def calculate_metrics(self):
-        #Calculate basic metrics
-        metrics = {}
-        
-        if self.reliable_sent > 0:
-            metrics['reliable_delivery'] = (self.reliable_received / self.reliable_sent) * 100
-            metrics['reliable_loss'] = 100 - metrics['reliable_delivery']
+            s = int(float(s)) if s not in (None, "", "NA") else None
+        except Exception:
+            s = None
+
+        if ev == "send" and dir_ == "TX" and ch == "REL" and s is not None and t is not None:
+            if s not in send_ts_by_seq:
+                send_ts_by_seq[s] = t
+
+    seqs_lat, lat_vals = [], []
+    missed = 0
+
+    for r in rows:
+        ev = (r.get("event") or "").lower()
+        if ev != "ack":
+            continue
+
+        s = r.get("seq")
+        try:
+            s = int(float(s)) if s not in (None, "", "NA") else None
+        except Exception:
+            s = None
+        if s is None:
+            continue
+
+        t_ack = fix_timestamp_units(r.get("ts_recv_ms"))
+        t_send = send_ts_by_seq.get(s)
+
+        if t_ack is None or t_send is None:
+            missed += 1
+            continue
+
+        rtt = t_ack - t_send  
+        if 0 <= rtt <= 5000:
+            seqs_lat.append(s)
+            lat_vals.append(rtt)
         else:
-            metrics['reliable_delivery'] = 0
-            metrics['reliable_loss'] = 0
-        
-        if self.reliable_latencies:
-            metrics['reliable_avg_latency'] = statistics.mean(self.reliable_latencies)
-            metrics['reliable_min_latency'] = min(self.reliable_latencies)
-            metrics['reliable_max_latency'] = max(self.reliable_latencies)
-            
-            if len(self.reliable_latencies) > 1:
-                jitters = []
-                for i in range(1, len(self.reliable_latencies)):
-                    jitters.append(abs(self.reliable_latencies[i] - self.reliable_latencies[i-1]))
-                metrics['reliable_jitter'] = statistics.mean(jitters)
-            else:
-                metrics['reliable_jitter'] = 0
-        
-        if self.unreliable_sent > 0:
-            metrics['unreliable_delivery'] = (self.unreliable_received / self.unreliable_sent) * 100
-            metrics['unreliable_loss'] = 100 - metrics['unreliable_delivery']
-        else:
-            metrics['unreliable_delivery'] = 0
-            metrics['unreliable_loss'] = 0
-        
-        if self.unreliable_latencies:
-            metrics['unreliable_avg_latency'] = statistics.mean(self.unreliable_latencies)
-            metrics['unreliable_min_latency'] = min(self.unreliable_latencies)
-            metrics['unreliable_max_latency'] = max(self.unreliable_latencies)
-            
-            if len(self.unreliable_latencies) > 1:
-                jitters = []
-                for i in range(1, len(self.unreliable_latencies)):
-                    jitters.append(abs(self.unreliable_latencies[i] - self.unreliable_latencies[i-1]))
-                metrics['unreliable_jitter'] = statistics.mean(jitters)
-            else:
-                metrics['unreliable_jitter'] = 0
-        
-        return metrics
-    
-    def print_comparison_report(self, metrics):
-        #Print comparison report
-        print("\n" + "="*50)
-        print("COMPARISON REPORT - H-UDP Protocol")
-        print("="*50)
-        
-        print("\nRELIABLE CHANNEL:")
-        print(f"  Packets sent: {self.reliable_sent}")
-        print(f"  Packets received: {self.reliable_received}")
-        print(f"  Delivery rate: {metrics.get('reliable_delivery', 0):.1f}%")
-        print(f"  Packet loss: {metrics.get('reliable_loss', 0):.1f}%")
-        print(f"  Retransmissions: {self.retransmissions}")
-        if self.reliable_latencies:
-            print(f"  Avg latency: {metrics.get('reliable_avg_latency', 0):.2f} ms")
-            print(f"  Jitter: {metrics.get('reliable_jitter', 0):.2f} ms")
-        
-        print("\nUNRELIABLE CHANNEL:")
-        print(f"  Packets sent: {self.unreliable_sent}")
-        print(f"  Packets received: {self.unreliable_received}")
-        print(f"  Delivery rate: {metrics.get('unreliable_delivery', 0):.1f}%")
-        print(f"  Packet loss: {metrics.get('unreliable_loss', 0):.1f}%")
-        if self.unreliable_latencies:
-            print(f"  Avg latency: {metrics.get('unreliable_avg_latency', 0):.2f} ms")
-            print(f"  Jitter: {metrics.get('unreliable_jitter', 0):.2f} ms")
-        
-        print("\n" + "="*50)
-    
-    def create_charts(self, metrics):
-        #Create charts for the metrics
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
-        fig.suptitle('H-UDP Protocol Performance Metrics', fontsize=16)
-        
-        if self.reliable_latencies or self.unreliable_latencies:
-            latency_data = []
-            labels = []
-            
-            if self.reliable_latencies:
-                latency_data.append(self.reliable_latencies)
-                labels.append('Reliable')
-            if self.unreliable_latencies:
-                latency_data.append(self.unreliable_latencies)
-                labels.append('Unreliable')
-            
-            ax1.boxplot(latency_data, labels=labels)
-            ax1.set_ylabel('Latency (ms)')
-            ax1.set_title('Latency Distribution')
-            ax1.grid(True, alpha=0.3)
-        
-        channels = ['Reliable', 'Unreliable']
-        delivery_rates = [
-            metrics.get('reliable_delivery', 0),
-            metrics.get('unreliable_delivery', 0)
-        ]
-        
-        colors = ['#4CAF50', '#FF9800']
-        bars = ax2.bar(channels, delivery_rates, color=colors)
-        ax2.set_ylabel('Delivery Rate (%)')
-        ax2.set_title('Packet Delivery Ratio')
-        ax2.set_ylim(0, 110)
-        ax2.axhline(y=100, color='r', linestyle='--', alpha=0.3)
-        
-        for bar, rate in zip(bars, delivery_rates):
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height + 1,
-                    f'{rate:.1f}%', ha='center', va='bottom')
-        
-        jitter_values = [
-            metrics.get('reliable_jitter', 0),
-            metrics.get('unreliable_jitter', 0)
-        ]
-        
-        bars = ax3.bar(channels, jitter_values, color=['#2196F3', '#FFC107'])
-        ax3.set_ylabel('Jitter (ms)')
-        ax3.set_title('Average Jitter')
-        ax3.grid(True, alpha=0.3, axis='y')
-        
-        for bar, jitter in zip(bars, jitter_values):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.1,
-                    f'{jitter:.2f}', ha='center', va='bottom')
-        
+            missed += 1
+
+    log(f"[info] matched ACKs with SENDs: {len(seqs_lat)} (missed {missed})")
+
+    return {"seq_lat": seqs_lat, "lat": lat_vals, "time_all": times_all}
+
+# plot helpers 
+def save_line(y, x=None, title="", ylabel="", xlabel="", fname="plot.png"):
+    if x is None:
+        x = range(len(y))
+    if not y:
+        log(f"[skip] {fname}: no data")
+        return
+    try:
+        plt.figure()
+        plt.plot(x, y)
+        plt.title(title)
+        plt.xlabel(xlabel)
+        plt.ylabel(ylabel)
+        out = os.path.join(PLOTS_DIR, fname)
         plt.tight_layout()
-        plt.savefig('performance_metrics.png', dpi=150)
-        print("Chart saved as 'performance_metrics.png'")
-        plt.show()
-    
-    def create_throughput_chart(self):
-        #Create a simple throughput chart
-        plt.figure(figsize=(10, 6))
-        
-        time_points = list(range(10))  
+        plt.savefig(out, dpi=160)
+        plt.close()
+        log(f"[ok] saved {out}")
+    except Exception as e:
+        log(f"[err] {fname}: {e}")
 
-        reliable_throughput = [self.reliable_received/10] * 10
-        unreliable_throughput = [self.unreliable_received/10] * 10
-        
-        plt.plot(time_points, reliable_throughput, 'b-', label='Reliable', linewidth=2)
-        plt.plot(time_points, unreliable_throughput, 'g-', label='Unreliable', linewidth=2)
-        
-        plt.xlabel('Time (seconds)')
-        plt.ylabel('Throughput (packets/second)')
-        plt.title('Throughput Over Time')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        plt.savefig('throughput_chart.png', dpi=150)
-        print("Throughput chart saved as 'throughput_chart.png'")
-        plt.show()
+def save_throughput(times_ms, window_s=1.0, fname="throughput.png"):
+    t = [fix_timestamp_units(v) for v in times_ms if v is not None]
+    t = [float(v) for v in t if v is not None and not math.isnan(v)]
+    if len(t) < 2:
+        log(f"[skip] {fname}: not enough timestamps")
+        return
+    t0 = min(t)
+    t = [(v - t0) / 1000.0 for v in t]  
+    tmax = max(t)
+    bins = max(1, int(math.ceil(tmax / window_s)))
+    counts = [0] * bins
+    for v in t:
+        idx = min(bins - 1, int(v // window_s))
+        counts[idx] += 1
+    centers = [(i + 0.5) * window_s for i in range(bins)]
+    save_line(counts, centers,
+              title="Throughput (pkts/s)",
+              ylabel="pkts/s", xlabel="time (s)",
+              fname=fname)
 
+def jitter_rfc3550(lat_ms):
+    if len(lat_ms) < 2:
+        return []
+    J_series = []
+    J = 0.0
+    prev = lat_ms[0]
+    for i in range(1, len(lat_ms)):
+        D = abs(lat_ms[i] - prev)
+        J += (D - J) / 16.0
+        J_series.append(J)
+        prev = lat_ms[i]
+    return J_series
 
-def create_sample_logs():
-    #Create sample log files for test
-    import random
-    
-    print("Creating sample log files for testing...")
-    
-    with open('sender_log.txt', 'w') as f:
-        for i in range(100):
-            channel = random.choice([0, 1])
-            retrans = 1 if (channel == 0 and random.random() < 0.1) else 0
-            timestamp = f"2025-11-01 10:00:{i%60:02d}.{random.randint(0,999):03d}"
-            f.write(f"[{timestamp}] SeqNo:{i} ChannelType:{channel} Size:1024 Retrans:{retrans}\n")
-    
-    with open('receiver_log.txt', 'w') as f:
-        for i in range(90):  
-            channel = random.choice([0, 1])
-            rtt = random.uniform(20, 60) if channel == 0 else random.uniform(15, 40)
-            timestamp = f"2025-11-01 10:00:{i%60:02d}.{random.randint(0,999):03d}"
-            f.write(f"[{timestamp}] SeqNo:{i} ChannelType:{channel} RTT:{rtt:.1f}ms Size:1024\n")
-    
-    print("Sample files created: sender_log.txt, receiver_log.txt")
+def main():
+    ap = argparse.ArgumentParser(description="Latency/Jitter/Throughput charts")
+    ap.add_argument("--sender", type=str, default="sender.txt",
+                    help="text log exported from sender.csv")
+    ap.add_argument("--receiver", type=str, default="receiver.txt",
+                    help="text log exported from receiver.csv")
+    args = ap.parse_args()
 
+    sender_rows = load_text_log(args.sender)
+    receiver_rows = load_text_log(args.receiver)
+
+    if not sender_rows and not receiver_rows:
+        log("[err] No logs found. Use --sender/--receiver paths.")
+        sys.exit(1)
+
+    if not sender_rows:
+        log("[warn] sender log empty; using receiver (might have no RTT).")
+    if not receiver_rows:
+        log("[warn] receiver log empty; using sender only (normal for now).")
+
+    base_rows = sender_rows if sender_rows else receiver_rows
+    data = extract_series(base_rows)
+    lat = data["lat"]
+    seqs = data["seq_lat"]
+
+    # latency plot
+    save_line(lat, seqs, title="Latency per packet", ylabel="ms",
+              xlabel="packet index", fname="latency.png")
+
+    # jitter plot
+    J = jitter_rfc3550(lat)
+    save_line(J, title="Jitter (RFC3550 estimator)", ylabel="ms",
+              xlabel="packet index", fname="jitter.png")
+
+    # throughput plot
+    times_all = data["time_all"]
+    save_throughput(times_all, window_s=1.0, fname="throughput.png")
+
+    log("[done] charts saved in 'plots/'")
 
 if __name__ == "__main__":
-    print("H-UDP Protocol Log Analyzer")
-    print("-" * 30)
-    
-    import os
-    if not os.path.exists('sender_log.txt') or not os.path.exists('receiver_log.txt'):
-        create_sample_logs()
-    
-    analyzer = SimpleLogAnalyzer('sender_log.txt', 'receiver_log.txt')
-    
-    analyzer.parse_logs()
-    
-    metrics = analyzer.calculate_metrics()
-    
-    analyzer.print_comparison_report(metrics)
-    
-    print("\nGenerating charts...")
-    analyzer.create_charts(metrics)
-    analyzer.create_throughput_chart()
-    
-    print("\nAnalysis complete!")
-    print("Files generated:")
-    print("  - performance_metrics.png")
-    print("  - throughput_chart.png")
+    main()
