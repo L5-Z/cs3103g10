@@ -6,6 +6,7 @@ def main():
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--log", default="logs/receiver.csv")
+    ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--peer-host", default=None)
     ap.add_argument("--peer-port", type=int, default=None)
     args = ap.parse_args()
@@ -13,7 +14,7 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((args.bind, args.port))
 
-    api = GameNetAPI(sock, log_path=args.log)
+    api = GameNetAPI(sock, log_path=args.log, verbose=args.verbose)
     if args.peer_host and args.peer_port:
         api.set_peer((args.peer_host, args.peer_port))
 

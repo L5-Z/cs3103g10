@@ -66,7 +66,9 @@ class GameNetAPI:
         peer: Optional[Tuple[str,int]] = None,
         log_path: Optional[str] = None,
         max_recv_size: int = 4096,
+        verbose: bool = False
     ):
+        self.verbose = verbose  
         self.sock = sock
         self.peer = peer  # must be set for sending & ACKs
         self.max_recv_size = max_recv_size
@@ -84,10 +86,9 @@ class GameNetAPI:
 
         # channels
         self.reliable_sender: Optional[ReliableSender] = None
-        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack)
+        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event)
 
         # control
-        import threading
         self._rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
         self._running = False
 
@@ -230,4 +231,13 @@ class GameNetAPI:
                     if self.onAck:
                         self.onAck(seq, rtt_ms)
             # else: ignore unknown channel
+
+    def _log_transport_event(self, ev: str, seq: int) -> None:
+        # Always write to CSV if present
+        if self.logger:
+            now = now_ms()
+            self.logger.write([now, "RX", "REL", seq, "", "", "", ev, "", 0])
+        # Optionally mirror to console
+        if self.verbose:
+            print(f"[REL/{ev}] seq={seq}")
 
