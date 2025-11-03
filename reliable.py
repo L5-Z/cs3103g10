@@ -109,10 +109,13 @@ class ReliableSender:
             return seq
 
     def on_ack(self, seq: int, echo_ts_ms: int):
-        # Uses echoed timestamp to form an RTT sample.
-        sample = now_ms() - echo_ts_ms
-        if sample >= 0:
+        now32   = now_ms() & 0xFFFFFFFF
+        send32  = echo_ts_ms & 0xFFFFFFFF
+        sample  = (now32 - send32) & 0xFFFFFFFF
+
+        if sample <= 10_000:
             self.rtt.update(sample)
+
         with self._lock:
             self._inflight.pop(seq, None)
 

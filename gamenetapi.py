@@ -284,10 +284,12 @@ class GameNetAPI:
                         echo_ts = unpack_ack(payload)
                     except Exception:
                         continue
-                    rtt_ms = now - echo_ts if now >= echo_ts else 0
+                    now32   = now_ms() & 0xFFFFFFFF
+                    rtt_ms  = (now32 - (echo_ts & 0xFFFFFFFF)) & 0xFFFFFFFF
+
                     self.reliable_sender.on_ack(seq, echo_ts)
                     if self.logger:
-                        self.logger.write([now, "RX", "ACK", seq, echo_ts, rtt_ms, "", "ack", "", len(payload)])
+                        self.logger.write([now_ms(), "RX", "ACK", seq, echo_ts, rtt_ms, "", "ack", "", len(payload)])
                     if self.onAck:
                         self.onAck(seq, rtt_ms)
             # else: ignore unknown channel
