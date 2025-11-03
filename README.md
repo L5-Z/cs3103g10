@@ -34,3 +34,40 @@ python3 ../charts-latency.py
 ## 4) Additional Notes
 
 In theory, should be able to simulate delay/loss with tc-netem but it's not tested rigorously on my end.
+
+## 5) Generate Charts (Single Run)
+
+After logs are generated (sender.csv and receiver.csv), run:
+
+cd logs
+python3 ../charts-latency.py --sender sender.csv
+
+Output files will be created inside logs/plots/:
+- latency.png
+- jitter.png
+- throughput.png
+
+## 6) Compare Two Runs (t = 200ms vs dynamic t)
+
+To compare latency/jitter/throughput between two versions:
+
+    a) Run with fixed t = 200ms
+    ./scripts/run_receiver.sh     # (Terminal A)
+    ./scripts/run_sender.sh       # (Terminal B)
+    mv logs/sender.csv logs/sender_static.csv
+
+    b) Run with dynamic t implementation
+    ./scripts/run_sender.sh
+    mv logs/sender.csv logs/sender_dynamic.csv
+
+    c) Generate comparison charts
+    cd logs
+    python3 ../charts-latency.py \
+    --sender-a sender_static.csv --label-a "t=200ms" \
+    --sender-b sender_dynamic.csv --label-b "dynamic t"
+
+This will create in logs/plots/:
+- latency_compare.png  
+- jitter_compare.png  
+- throughput_A.png  
+- throughput_B.png
