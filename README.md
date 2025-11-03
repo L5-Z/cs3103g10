@@ -100,7 +100,8 @@ tc qdisc show dev lo
 # 4) Export logs and generate charts
 python3 tools/export_for_charts.py logs/sender.csv   --mode sender
 python3 tools/export_for_charts.py logs/receiver.csv --mode receiver
-(cd logs && python3 ../charts-latency.py)
+python3 charts-latency.py --sender ./logs/receiver.csv
+python3 charts-latency.py --receiver ./logs/receiver.csv
 
 # 5) Clean up (remove impairment)
 sudo tc qdisc del dev lo root
