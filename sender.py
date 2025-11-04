@@ -12,12 +12,20 @@ def main():
     ap.add_argument("--log", default="logs/sender.csv", help="Sender-side transport log")
     ap.add_argument("--verbose", action="store_true", help="Print send/ACK progress")
     ap.add_argument("--print-every", type=int, default=20, help="Print a status line every N sends (when --verbose)")
-    # ap.add_argument("--static", type=int, default=20, help="Uses static t timeout of 200ms for mock data (for repeatability)")
+    #ap.add_argument("--static-t", type=int, default=200, help="If set, forces a static t timeout (ms) instead of adaptive (e.g. 200).")
+
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     api = GameNetAPI(sock, log_path=args.log)
     api.set_peer((args.host, args.port))
+
+    # --- static-t override for testing ---
+    #if args.static_t is not None:
+    #    static_value = int(args.static_t)
+    #    print(f"[CONFIG] Using static t = {static_value} ms for all reliable sends.")
+    #    api._compute_dynamic_t = lambda urgency_ms=0: static_value
+
 
     sent_total = 0
     sent_rel = 0
