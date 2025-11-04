@@ -37,7 +37,7 @@ class RttEstimator:
 
 class ReliableSender:
     # Tracks in-flight REL packets and retransmits on RTO.
-    def __init__(self, sock, peer: Tuple[str, int], rtt: RttEstimator):
+    def __init__(self, sock, peer: Tuple[str, int], rtt: RttEstimator,log_retx_cb: Optional[Callable[[int, int, int, int], None]] = None):
         self.sock = sock
         self.peer = peer
         self.rtt = rtt
@@ -46,6 +46,7 @@ class ReliableSender:
         self._lock = threading.Lock()
         self._running = False
         self._thr = threading.Thread(target=self._loop, daemon=True)
+        self._log_retx_cb = log_retx_cb
 
     def start(self):
         self._running = True
@@ -107,6 +108,13 @@ class ReliableSender:
                         self.sock.sendto(pkt, self.peer)
                         rec["last_tx"] = ts
                         rec["retries"] += 1
+                        if self._log_retx_cb: 
+                            try: 
+                                # arguments: (seq, send_ts_ms, retries, payload_len) 
+                                self._log_retx_cb(seq, ts, rec["retries"], len(rec["payload"])) 
+                            except Exception: 
+                                # Never let logging crash the retransmit loop 
+                                pass
 
 class ReliableReceiver:
     # ACKs every REL packet; delivers in-order with a small reordering buffer.
