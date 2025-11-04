@@ -163,7 +163,6 @@ class GameNetAPI:
             if self.reliable_sender is None:
                 self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
                 self.reliable_sender.start()
-            seq = self.reliable_sender.send(payload, urgency_ms=urgency_ms)
             
             # compute adaptive per-packet deadline
             deadline_ms = self._compute_dynamic_t(urgency_ms)
@@ -304,4 +303,5 @@ class GameNetAPI:
         # Optionally mirror to console
         if self.verbose:
             print(f"[REL/{ev}] seq={seq}")
+
 
