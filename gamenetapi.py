@@ -225,11 +225,11 @@ class GameNetAPI:
         if self.onReliable:
             self.onReliable(app_payload)
 
-    def unpack_ack(b: bytes) -> int:
+    def unpack_ack(self, b: bytes) -> int:
         (echo_ts_ms,) = struct.unpack("!I", b[:4])
         return echo_ts_ms
     
-    def pack_ack(seq: int, echo_ts_ms: int) -> bytes:
+    def pack_ack(self, seq: int, echo_ts_ms: int) -> bytes:
     # ACK payload carries only the echoed send timestamp.
         return struct.pack("!I", echo_ts_ms & 0xFFFFFFFF)
 
