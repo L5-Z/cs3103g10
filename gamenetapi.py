@@ -68,6 +68,8 @@ class GameNetAPI:
         t_min_ms: int = 120,                   # clamp low
         t_max_ms: int = 300,                   # clamp high
         max_urgency_ms: int = 50,             # cap for urgency hint
+        srtt: Optional[float] = None,
+        rttvar: Optional[float] = None,
     ):
         self.verbose = verbose  
         self.sock = sock
@@ -187,12 +189,22 @@ class GameNetAPI:
             "rx_rel": self._rx_rel,
             "rx_unrel": self._rx_unrel,
             "rx_ack": self._rx_ack,
-            "srtt_ms": (self.rtt.srtt if self.rtt.srtt is not None else 0.0),
-            "rttvar_ms": (self.rtt.rttvar if self.rtt.rttvar is not None else 0.0),
+            "srtt_ms": (self.srtt if self.srtt is not None else 0.0),
+            "rttvar_ms": (self.rttvar if self.rttvar is not None else 0.0),
             "t_min_ms": self.t_min_ms, # expose for debugging
             "t_max_ms": self.t_max_ms, # expose for debugging
             "k_rttvar": self.k_rttvar,
         }
+
+    def update(self, sample_ms: float):
+        if self.srtt is None:
+            self.srtt = float(sample_ms)
+            self.rttvar = self.srtt / 2.0
+            return
+        alpha, beta = 0.125, 0.25
+        err = float(sample_ms) - self.srtt
+        self.srtt += alpha * err
+        self.rttvar = (1 - beta) * self.rttvar + beta * abs(err)
 
     # ---------------- Internal ----------------
 
@@ -202,13 +214,13 @@ class GameNetAPI:
         Adaptive 't' (skip-after-t / retransmit deadline proxy) per packet.
 
         Formula: t = clamp( SRTT + k*RTTVAR + urgency, [t_min, t_max] )
-        - SRTT/RTTVAR come from self.rtt (updated using ACK samples).
+        - SRTT/RTTVAR self0generated (updated using ACK samples).
         - urgency is a small non-negative hint capped to self.max_urgency_ms.
         - Fallback when we don't have SRTT yet: assume the default base (200ms) and rttvar ~ base/2.
         """
         # Pull current estimates
-        srtt = self.rtt.srtt
-        rttvar = self.rtt.rttvar
+        srtt = self.srtt
+        rttvar = self.rttvar
 
         if srtt is None or rttvar is None:
             srtt, rttvar = 200.0, 100.0 # use defaults at the start
