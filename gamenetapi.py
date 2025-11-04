@@ -98,10 +98,7 @@ class GameNetAPI:
         self.reliable_sender: Optional[ReliableSender] = None
         
         # optionally pass deadline function down to receiver
-        self.reliable_receiver = ReliableReceiver(
-            self._deliver_reliable,
-            self._send_ack
-        )
+        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event)
 
         # once we expose a setter in ReliableReceiver, hook it up safely:
         if hasattr(self.reliable_receiver, "set_gap_deadline_fn"):
@@ -169,6 +166,8 @@ class GameNetAPI:
             if self.reliable_sender is None:
                 self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
                 self.reliable_sender.start()
+            seq = self.reliable_sender.send(payload, urgency_ms=urgency_ms)
+            
             # compute adaptive per-packet deadline
             deadline_ms = self._compute_deadline_ms(urgency_ms)
 
@@ -177,9 +176,7 @@ class GameNetAPI:
 
             self._tx_rel += 1
             if self.logger:
-                self.logger.write([
-                    now_ms(), "TX", "REL", seq, now_ms(), "", deadline_ms, "send", "", len(payload)
-                ])
+                self.logger.write([now_ms(), "TX", "REL", seq, now_ms(), "", 0, "send", "", len(payload)])
         else:
             pkt = pack_header(CHAN_UNRELIABLE, 0, now_ms()) + payload
             self.sock.sendto(pkt, self.peer)
