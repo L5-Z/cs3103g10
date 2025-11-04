@@ -12,6 +12,7 @@ def main():
     ap.add_argument("--log", default="logs/sender.csv", help="Sender-side transport log")
     ap.add_argument("--verbose", action="store_true", help="Print send/ACK progress")
     ap.add_argument("--print-every", type=int, default=20, help="Print a status line every N sends (when --verbose)")
+    # ap.add_argument("--static", type=int, default=20, help="Uses static t timeout of 200ms for mock data (for repeatability)")
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

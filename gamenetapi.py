@@ -88,6 +88,8 @@ class GameNetAPI:
         self.t_min_ms = int(t_min_ms)
         self.t_max_ms = int(t_max_ms)
         self.max_urgency_ms = int(max_urgency_ms)
+        self.srtt = srtt
+        self.rttvar = rttvar
         
         # channels
         self.reliable_sender: Optional[ReliableSender] = None
