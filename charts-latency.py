@@ -4,6 +4,7 @@ CS3103 Group 10 - Log Analysis Script
 
 # The script reads sender/receiver log files and plots latency, jitter and throughput.
 # It’s okay if the receiver log is empty (RTT is only in sender logs for now).
+# Requirements : matplotlib, pandas, numpy
 
 import os
 import sys
@@ -85,11 +86,11 @@ def fix_timestamp_units(v):
         v = float(v)
     except Exception:
         return None
-    if v > 1e15:
+    if v > 1e15:  
         return v / 1e6
-    if v > 1e12:
+    if v > 1e12:  
         return v
-    if v > 1e9:
+    if v > 1e9:  
         return v * 1000.0
     return v
 
@@ -113,15 +114,13 @@ def extract_series(rows):
             s = None
 
         if ev == "send" and dir_ == "TX" and ch == "REL" and s is not None and t is not None:
-            if s not in send_ts_by_seq:
+            if s not in send_ts_by_seq:  
                 send_ts_by_seq[s] = t
 
     seqs_lat, lat_vals = [], []
     missed = 0
-
     for r in rows:
-        ev = (r.get("event") or "").lower()
-        if ev != "ack":
+        if (r.get("event") or "").lower() != "ack":
             continue
 
         s = r.get("seq")
@@ -132,22 +131,21 @@ def extract_series(rows):
         if s is None:
             continue
 
-        t_ack = fix_timestamp_units(r.get("ts_recv_ms"))
+        t_ack  = fix_timestamp_units(r.get("ts_recv_ms"))
         t_send = send_ts_by_seq.get(s)
 
         if t_ack is None or t_send is None:
             missed += 1
             continue
 
-        rtt = t_ack - t_send  
-        if 0 <= rtt <= 5000:
+        rtt = t_ack - t_send
+        if 0 <= rtt <= 5000:  
             seqs_lat.append(s)
             lat_vals.append(rtt)
         else:
             missed += 1
 
     log(f"[info] matched ACKs with SENDs: {len(seqs_lat)} (missed {missed})")
-
     return {"seq_lat": seqs_lat, "lat": lat_vals, "time_all": times_all}
 
 # plot helpers 
@@ -204,21 +202,88 @@ def jitter_rfc3550(lat_ms):
         prev = lat_ms[i]
     return J_series
 
+def save_dual_line(y1, x1, y2, x2, label1, label2,
+                   title="", ylabel="", xlabel="", fname="plot.png"):
+    if not y1 and not y2:
+        log(f"[skip] {fname}: no data"); return
+    if x1 is None: x1 = range(len(y1))
+    if x2 is None: x2 = range(len(y2))
+    plt.figure()
+    if y1: plt.plot(x1, y1, label=label1)
+    if y2: plt.plot(x2, y2, label=label2)
+    plt.title(title); plt.xlabel(xlabel); plt.ylabel(ylabel)
+    plt.legend()
+    out = os.path.join(PLOTS_DIR, fname)
+    plt.tight_layout(); plt.savefig(out, dpi=160); plt.close()
+    log(f"[ok] saved {out}")
+
+
+def describe_stats(name, vals):
+    if not vals:
+        log(f"[stats] {name}: no samples")
+        return
+    import numpy as np
+    a = np.array(vals, dtype=float)
+    p95 = float(np.percentile(a, 95))
+    msg = (f"[stats] {name}: count={len(a)}  mean={a.mean():.3f} ms  "
+           f"median={np.median(a):.3f} ms  p95={p95:.3f} ms  max={a.max():.3f} ms")
+    log(msg)
+
 def main():
-    ap = argparse.ArgumentParser(description="Latency/Jitter/Throughput charts")
-    ap.add_argument("--sender", type=str, default="sender.txt",
-                    help="text log exported from sender.csv")
-    ap.add_argument("--receiver", type=str, default="receiver.txt",
-                    help="text log exported from receiver.csv")
+    ap = argparse.ArgumentParser(description="Latency/Jitter/Throughput charts (single or A vs B)")
+    ap.add_argument("--sender", type=str, default=None, help="single run: sender CSV/TXT")
+    ap.add_argument("--receiver", type=str, default="receiver.txt", help="(unused for RTT, optional)")
+    ap.add_argument("--sender-a", type=str, help="first run: sender CSV/TXT")
+    ap.add_argument("--sender-b", type=str, help="second run: sender CSV/TXT")
+    ap.add_argument("--label-a", type=str, default="t=200ms")
+    ap.add_argument("--label-b", type=str, default="dynamic t")
     args = ap.parse_args()
 
-    sender_rows = load_text_log(args.sender)
+    compare_mode = bool(args.sender_a and args.sender_b)
+
+    if compare_mode:
+        rowsA = load_text_log(args.sender_a)
+        rowsB = load_text_log(args.sender_b)
+        if not rowsA and not rowsB:
+            log("[err] No logs for A or B."); sys.exit(1)
+
+        dataA = extract_series(rowsA)
+        dataB = extract_series(rowsB)
+
+        # latency
+        save_dual_line(
+            dataA["lat"], dataA["seq_lat"],
+            dataB["lat"], dataB["seq_lat"],
+            args.label_a, args.label_b,
+            title="Latency per packet (A vs B)", ylabel="ms", xlabel="packet index",
+            fname="latency_compare.png"
+        )
+
+        # jitter
+        J_A = jitter_rfc3550(dataA["lat"])
+        J_B = jitter_rfc3550(dataB["lat"])
+        save_dual_line(
+            J_A, None, J_B, None,
+            args.label_a, args.label_b,
+            title="Jitter (RFC3550) – A vs B", ylabel="ms", xlabel="packet index",
+            fname="jitter_compare.png"
+        )
+
+        describe_stats(f"Latency {args.label_a}", dataA["lat"])
+        describe_stats(f"Latency {args.label_b}", dataB["lat"])
+
+        save_throughput(dataA["time_all"], fname="throughput_A.png")
+        save_throughput(dataB["time_all"], fname="throughput_B.png")
+
+        log("[done] compare charts saved in 'plots/'")
+        return
+
+    sender_path = args.sender or "sender.txt"
+    sender_rows = load_text_log(sender_path)
     receiver_rows = load_text_log(args.receiver)
 
     if not sender_rows and not receiver_rows:
-        log("[err] No logs found. Use --sender/--receiver paths.")
-        sys.exit(1)
-
+        log("[err] No logs found. Use --sender path."); sys.exit(1)
     if not sender_rows:
         log("[warn] sender log empty; using receiver (might have no RTT).")
     if not receiver_rows:
@@ -226,23 +291,18 @@ def main():
 
     base_rows = sender_rows if sender_rows else receiver_rows
     data = extract_series(base_rows)
-    lat = data["lat"]
-    seqs = data["seq_lat"]
 
-    # latency plot
-    save_line(lat, seqs, title="Latency per packet", ylabel="ms",
-              xlabel="packet index", fname="latency.png")
-
-    # jitter plot
-    J = jitter_rfc3550(lat)
+    save_line(data["lat"], data["seq_lat"],
+              title="Latency per packet", ylabel="ms", xlabel="packet index",
+              fname="latency.png")
+    J = jitter_rfc3550(data["lat"])
     save_line(J, title="Jitter (RFC3550 estimator)", ylabel="ms",
               xlabel="packet index", fname="jitter.png")
-
-    # throughput plot
-    times_all = data["time_all"]
-    save_throughput(times_all, window_s=1.0, fname="throughput.png")
-
+    save_throughput(data["time_all"], window_s=1.0, fname="throughput.png")
     log("[done] charts saved in 'plots/'")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log(f"[err] crashed: {e}")
