@@ -33,10 +33,9 @@ def rto_ms() -> int:
 
 class ReliableSender:
     # Tracks in-flight REL packets and retransmits on RTO.
-    def __init__(self, sock, peer: Tuple[str, int], rtt):
+    def __init__(self, sock, peer: Tuple[str, int]):
         self.sock = sock
         self.peer = peer
-        self.rtt = rtt
         self._seq = 0
         self._inflight: Dict[int, Dict] = {}
         self._lock = threading.Lock()

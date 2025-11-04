@@ -50,7 +50,6 @@ from logger import Logger
 from reliable import (
     ReliableSender,
     ReliableReceiver,
-    RttEstimator,
 )
 
 
@@ -83,9 +82,6 @@ class GameNetAPI:
 
         # logging
         self.logger = Logger(log_path) if log_path else None
-
-        # RTT estimation (shared with reliable sender)
-        self.rtt = RttEstimator()
 
         # store adaptive-t config
         self.k_rttvar = float(k_rttvar)
@@ -134,12 +130,12 @@ class GameNetAPI:
         # Explicitly set the remote peer (used for send & ACK).
         self.peer = peer
         if self.reliable_sender is None:
-            self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
+            self.reliable_sender = ReliableSender(self.sock, self.peer)
 
     def start(self) -> None:
         # Start background RX thread (and reliable sender if we have a peer).
         if self.peer and self.reliable_sender is None:
-            self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
+            self.reliable_sender = ReliableSender(self.sock, self.peer)
         if self.reliable_sender:
             self.reliable_sender.start()
         self._running = True
@@ -163,7 +159,7 @@ class GameNetAPI:
         assert self.peer is not None, "Peer not set. Call set_peer((host,port)) or pass peer in GameNetAPI()."
         if reliable:
             if self.reliable_sender is None:
-                self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
+                self.reliable_sender = ReliableSender(self.sock, self.peer)
                 self.reliable_sender.start()
             
             # compute adaptive per-packet deadline
