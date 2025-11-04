@@ -4,6 +4,7 @@
 - Added transport event logging for reliable RX: `action=deliver|buffer|dup`.
 - Unified CSV logging via `logger.Logger`; exporter to plain-text logs for charts.
 - Run scripts to start receiver/sender and capture logs.
+- `ts`, logged by the receiver represents milliseconds since epoch, masked to 32 bits. 
 
 ## 2) Things That Are Missing (for the team)
 - **skip-after-t (gap timer)** in `ReliableReceiver` to bound waiting on a missing seq.
