@@ -11,24 +11,6 @@ MAX_SEQ  = 1 << 16
 HALF_SEQ = MAX_SEQ >> 1
 MASK16   = MAX_SEQ - 1
 
-def seq_eq(a: int, b: int) -> bool:
-    return ((a ^ b) & MASK16) == 0
-
-def seq_less(a: int, b: int) -> bool:
-    #True iff a comes before b in modulo-2^16 order.
-    return ((b - a) & MASK16) < HALF_SEQ and not seq_eq(a, b)
-
-def seq_leq(a: int, b: int) -> bool:
-    return seq_eq(a, b) or seq_less(a, b)
-
-def seq_dist_fwd(a: int, b: int) -> int:
-    # Forward distance a->b in modulo-2^16.
-    return (b - a) & MASK16
-
-def in_window(base: int, s: int, win: int) -> bool:
-    # Is s within (base, base+win] ahead (mod 2^16)?
-    d = seq_dist_fwd(base, s)
-    return 0 < d <= win
 
 class RttEstimator:
     # Keeps SRTT/RTTVAR; provides bounded RTO in ms.
@@ -52,14 +34,6 @@ class RttEstimator:
             return 200
         rto = self.srtt + self._k * self.rttvar
         return int(max(120, min(600, rto)))
-
-def pack_ack(seq: int, echo_ts_ms: int) -> bytes:
-    # ACK payload carries only the echoed send timestamp.
-    return struct.pack("!I", echo_ts_ms & 0xFFFFFFFF)
-
-def unpack_ack(b: bytes) -> int:
-    (echo_ts_ms,) = struct.unpack("!I", b[:4])
-    return echo_ts_ms
 
 class ReliableSender:
     # Tracks in-flight REL packets and retransmits on RTO.
@@ -90,7 +64,7 @@ class ReliableSender:
           and use it as:
             * retransmission cutoff (do not keep retrying past deadline)
             * packet expiry (if deadline passes before ACK, drop and mark skipped)
-        - else fall back to previous default (e.g., 200ms) or your own logic.
+        - else fall back to previous default (e.g. 200ms)
         """
         # Allocates seq, sends once, stores state for retransmit.
         with self._lock:
@@ -160,6 +134,22 @@ class ReliableReceiver:
             payload, _send_ts, _arr = self.buf.pop(self.expected_seq)
             self.deliver_cb(payload)
             self._advance_expected()
+    
+    def seq_eq(self, a: int, b: int) -> bool:
+        return ((a ^ b) & MASK16) == 0
+
+    def seq_less(self, a: int, b: int) -> bool:
+        #True iff a comes before b in modulo-2^16 order.
+        return ((b - a) & MASK16) < HALF_SEQ and not self.seq_eq(a, b)
+
+    def seq_dist_fwd(self, a: int, b: int) -> int:
+        # Forward distance a->b in modulo-2^16.
+        return (b - a) & MASK16
+
+    def in_window(self, base: int, s: int, win: int) -> bool:
+        # Is s within (base, base+win] ahead (mod 2^16)?
+        d = self.seq_dist_fwd(base, s)
+        return 0 < d <= win
 
     def on_packet(self, seq: int, send_ts_ms: int, payload: bytes) -> None:
         # Always ACK immediately so sender RTT/RTO keeps working.
@@ -177,7 +167,7 @@ class ReliableReceiver:
                 return
 
             # In-order arrival → deliver and drain.
-            if seq_eq(seq, self.expected_seq):
+            if self.seq_eq(seq, self.expected_seq):
                 self.deliver_cb(payload)
                 self._log("deliver", seq)
                 self._advance_expected()
@@ -185,8 +175,8 @@ class ReliableReceiver:
                 return
 
             # Ahead-of-gap arrival → buffer if within window and not already buffered.
-            if seq_less(self.expected_seq, seq):
-                if seq not in self.buf and in_window(self.expected_seq, seq, self.max_buf):
+            if self.seq_less(self.expected_seq, seq):
+                if seq not in self.buf and self.in_window(self.expected_seq, seq, self.max_buf):
                     self.buf[seq] = (payload, send_ts_ms, arrival)
                     self._log("buffer", seq)
                 # else: too far ahead or duplicate in buffer then drop silently

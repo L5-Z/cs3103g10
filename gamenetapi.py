@@ -38,6 +38,7 @@ Extra Details
 import socket
 import threading
 import time
+import struct
 from typing import Callable, Optional, Tuple
 
 from header import (
@@ -49,12 +50,8 @@ from logger import Logger
 from reliable import (
     ReliableSender,
     ReliableReceiver,
-    pack_ack,
-    unpack_ack,
     RttEstimator,
 )
-
-
 
 
 class GameNetAPI:
@@ -103,7 +100,7 @@ class GameNetAPI:
         # once we expose a setter in ReliableReceiver, hook it up safely:
         if hasattr(self.reliable_receiver, "set_gap_deadline_fn"):
             try:
-                self.reliable_receiver.set_gap_deadline_fn(self._compute_deadline_ms)
+                self.reliable_receiver.set_gap_deadline_fn(self._compute_dynamic_t)
             except Exception:
                 pass  # stay compatible even if method exists but signature differs
 
@@ -159,7 +156,7 @@ class GameNetAPI:
 
         payload: application bytes (independent packet)
         reliable: True for reliable channel; False for unreliable
-        urgency_ms: small positive hint to increase deadline (0..50ms typical)
+        urgency_ms: small positive hint to increase deadline (0-50ms typical)
         """
         assert self.peer is not None, "Peer not set. Call set_peer((host,port)) or pass peer in GameNetAPI()."
         if reliable:
@@ -169,7 +166,7 @@ class GameNetAPI:
             seq = self.reliable_sender.send(payload, urgency_ms=urgency_ms)
             
             # compute adaptive per-packet deadline
-            deadline_ms = self._compute_deadline_ms(urgency_ms)
+            deadline_ms = self._compute_dynamic_t(urgency_ms)
 
             # Pass deadline to sender
             seq = self.reliable_sender.send(payload, urgency_ms=urgency_ms, deadline_ms=deadline_ms)
@@ -200,8 +197,8 @@ class GameNetAPI:
 
     # ---------------- Internal ----------------
 
-    # adaptive deadline function
-    def _compute_deadline_ms(self, urgency_ms: int = 0) -> int:
+    # adaptive dynamic t deadline
+    def _compute_dynamic_t(self, urgency_ms: int = 0) -> int:
         """
         Adaptive 't' (skip-after-t / retransmit deadline proxy) per packet.
 
@@ -229,10 +226,18 @@ class GameNetAPI:
         if self.onReliable:
             self.onReliable(app_payload)
 
+    def unpack_ack(b: bytes) -> int:
+        (echo_ts_ms,) = struct.unpack("!I", b[:4])
+        return echo_ts_ms
+    
+    def pack_ack(seq: int, echo_ts_ms: int) -> bytes:
+    # ACK payload carries only the echoed send timestamp.
+        return struct.pack("!I", echo_ts_ms & 0xFFFFFFFF)
+
     def _send_ack(self, seq: int, echo_ts_ms: int) -> None:
         # Ack is ChannelType=2 with payload=echo_ts (uint32)
         assert self.peer is not None, "Peer not set, cannot send ACK"
-        pkt = pack_header(CHAN_ACK, seq, now_ms()) + pack_ack(seq, echo_ts_ms)
+        pkt = pack_header(CHAN_ACK, seq, now_ms()) + self.pack_ack(seq, echo_ts_ms)
         self.sock.sendto(pkt, self.peer)
 
     def _rx_loop(self) -> None:
@@ -278,7 +283,7 @@ class GameNetAPI:
                 # Only meaningful for the sender side
                 if self.reliable_sender is not None:
                     try:
-                        echo_ts = unpack_ack(payload)
+                        echo_ts = self.unpack_ack(payload)
                     except Exception:
                         continue
                     now32   = now_ms() & 0xFFFFFFFF
