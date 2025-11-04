@@ -11,33 +11,29 @@ MAX_SEQ  = 1 << 16
 HALF_SEQ = MAX_SEQ >> 1
 MASK16   = MAX_SEQ - 1
 
+srtt = None
+rttvar = None
+_k = 3.0
 
-class RttEstimator:
-    # Keeps SRTT/RTTVAR; provides bounded RTO in ms.
-    def __init__(self):
-        self.srtt: Optional[float] = None
-        self.rttvar: Optional[float] = None
-        self._k = 4.0
+def update(sample_ms: float):
+    if srtt is None:
+        srtt = float(sample_ms)
+        rttvar = srtt / 2.0
+        return
+    alpha, beta = 0.125, 0.25
+    err = float(sample_ms) - srtt
+    srtt += alpha * err
+    rttvar = (1 - beta) * rttvar + beta * abs(err)
 
-    def update(self, sample_ms: float):
-        if self.srtt is None:
-            self.srtt = float(sample_ms)
-            self.rttvar = self.srtt / 2.0
-            return
-        alpha, beta = 0.125, 0.25
-        err = float(sample_ms) - self.srtt
-        self.srtt += alpha * err
-        self.rttvar = (1 - beta) * self.rttvar + beta * abs(err)
-
-    def rto_ms(self) -> int:
-        if self.srtt is None or self.rttvar is None:
-            return 200
-        rto = self.srtt + self._k * self.rttvar
-        return int(max(120, min(600, rto)))
+def rto_ms() -> int:
+    if srtt is None or rttvar is None:
+        return 200
+    rto = srtt + _k * rttvar
+    return int(max(120, min(600, rto)))
 
 class ReliableSender:
     # Tracks in-flight REL packets and retransmits on RTO.
-    def __init__(self, sock, peer: Tuple[str, int], rtt: RttEstimator):
+    def __init__(self, sock, peer: Tuple[str, int], rtt):
         self.sock = sock
         self.peer = peer
         self.rtt = rtt
@@ -79,6 +75,7 @@ class ReliableSender:
                 "retries": 0,
                 "first_ts": ts,
                 "urgency": max(0, int(urgency_ms)),
+                "deadline": deadline_ms,
             }
             return seq
 
@@ -97,10 +94,10 @@ class ReliableSender:
         while self._running:
             time.sleep(0.01)
             now = now_ms()
-            rto = self.rtt.rto_ms()
+            rto = rto_ms()
             with self._lock:
                 for seq, rec in list(self._inflight.items()):
-                    deadline = rec["last_tx"] + max(80, rto - rec["urgency"])
+                    deadline = rec["last_tx"] + max(80, rto - rec["urgency"]) 
                     if now >= deadline:
                         ts = now_ms()
                         pkt = pack_header(CHAN_RELIABLE, seq, ts) + rec["payload"]
