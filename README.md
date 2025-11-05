@@ -155,15 +155,15 @@ With your chosen `tc netem` configuration already applied (Section 2), use two t
 ### 3.1 Start Receiver
 
 ```bash
-# Terminal A: Receiver
-./scripts/run_receiver.sh --verbose
+# Terminal A (receiver):
+./scripts/run_receiver.sh --verbose --t-mode dynamic
 ```
 
 ### 3.2 Start Sender
 
 ```bash
-# Terminal B: Sender
-./scripts/run_sender.sh --verbose --print-every 10
+# Terminal B (sender):
+./scripts/run_sender.sh --verbose --t-mode dynamic --duration 8 --pps 20 --reliable-ratio 0.7
 ```
 
 Alternative sender configuration (heavier reliable stream):
@@ -192,13 +192,7 @@ Alternatively, use the provided static and dynamic script (On one terminal)
 
 
 Provided are some more settings to play around
-```
-# Terminal A (receiver):
-./scripts/run_receiver.sh --verbose --t-mode dynamic
-
-# Terminal B (sender):
-./scripts/run_sender.sh --verbose --t-mode dynamic --duration 8 --pps 20 --reliable-ratio 0.7
-
+```bash
 # Heavier reliable stream (all REL):
 ./scripts/run_sender.sh --verbose --t-mode dynamic --duration 10 --pps 300 --reliable-ratio 1.0
 ```
