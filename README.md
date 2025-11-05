@@ -187,7 +187,7 @@ Alternatively, use the provided static and dynamic script (On one terminal)
 
 ```bash
 ### Option B — Static Timer
-+./scripts/run_static.sh --verbose --t-static-ms 200 --duration 8 --pps 20 --reliable-ratio 0.7
+./scripts/run_static.sh --verbose --t-static-ms 200 --duration 8 --pps 20 --reliable-ratio 0.7
 ```
 
 
