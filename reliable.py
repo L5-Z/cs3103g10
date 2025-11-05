@@ -43,6 +43,7 @@ class ReliableSender:
         self._lock = threading.Lock()
         self._running = False
         self._thr = threading.Thread(target=self._loop, daemon=True)
+        self.seen_rel = set()
 
 
     def start(self):
@@ -126,6 +127,7 @@ class ReliableReceiver:
         self.max_buf = 1024                                         # Adjustable Buffer
         self._lock = threading.Lock()                               # RX thread safety (GameNetAPI runs on a background thread)
         self.log_cb = log_cb
+        self.seen_rel = set()
 
     def _log(self, ev: str, seq: int) -> None:
         if self.log_cb:
@@ -160,6 +162,14 @@ class ReliableReceiver:
         return 0 < d <= win
 
     def on_packet(self, seq: int, send_ts_ms: int, payload: bytes) -> None:
+        with self._lock: 
+            if seq in self.seen_rel:
+                self._log("dup", seq) 
+                if self.receiver_logger is not None:
+                    pass 
+                    
+                return
+        
         # Always ACK immediately so sender RTT/RTO keeps working.
         self.send_ack_cb(seq, send_ts_ms)
         arrival = now_ms()
