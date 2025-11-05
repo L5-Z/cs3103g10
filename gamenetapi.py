@@ -98,11 +98,12 @@ class GameNetAPI:
         self.t_max_ms = int(t_max_ms)
         self.max_urgency_ms = int(max_urgency_ms)
         
-        # channels
-        self.reliable_sender: Optional[ReliableSender] = None
-        
-        # optionally pass deadline function down to receiver
-        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event)
+        # channels (defer ReliableSender until peer is known)
+        self.reliable_sender = None
+        # receiver is fine to construct now
+        self.reliable_receiver = ReliableReceiver(
+            self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event
+        )
 
         # once we expose a setter in ReliableReceiver, hook it up safely:
         if hasattr(self.reliable_receiver, "set_gap_deadline_fn"):
@@ -156,13 +157,21 @@ class GameNetAPI:
     def set_peer(self, peer: Tuple[str,int]) -> None:
         # Explicitly set the remote peer (used for send & ACK).
         self.peer = peer
-        if self.reliable_sender is None:
-            self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
+        if self.peer and self.reliable_sender is None:
+            self.reliable_sender = ReliableSender(
+                self.sock, self.peer, self.rtt,
+                log_retx_cb=self._log_tx_retransmit,
+                log_expire_cb=self._log_tx_expire
+            )
 
     def start(self) -> None:
         # Start background RX thread (and reliable sender if we have a peer).
         if self.peer and self.reliable_sender is None:
-            self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
+            self.reliable_sender = ReliableSender(
+                self.sock, self.peer, self.rtt,
+                log_retx_cb=self._log_tx_retransmit,
+                log_expire_cb=self._log_tx_expire
+            )
         if self.reliable_sender:
             self.reliable_sender.start()
         self._running = True
@@ -186,7 +195,11 @@ class GameNetAPI:
         assert self.peer is not None, "Peer not set. Call set_peer((host,port)) or pass peer in GameNetAPI()."
         if reliable:
             if self.reliable_sender is None:
-                self.reliable_sender = ReliableSender(self.sock, self.peer, self.rtt)
+                self.reliable_sender = ReliableSender(
+                    self.sock, self.peer, self.rtt,
+                    log_retx_cb=self._log_tx_retransmit,
+                    log_expire_cb=self._log_tx_expire
+                )
                 self.reliable_sender.start()
         
             # compute per-packet deadline 't' based on mode (for EVERY send)
@@ -358,5 +371,25 @@ class GameNetAPI:
         # Optionally mirror to console
         if self.verbose:
             print(f"[REL/{ev}] seq={seq}")
+
+    def _log_tx_retransmit(self, seq: int, send_ts_ms: int, retries: int, payload_len: int) -> None:
+        """
+        Called from ReliableSender._loop() on every retransmission.
+        Writes a single CSV row to sender log.
+        """
+        if self.logger:
+            now = now_ms()
+            # CSV: ts, dir, channel, seq, send_ts_ms, rtt_ms, retries, event, deadline_t_ms, len_bytes
+            self.logger.write([now, "TX", "REL", seq, send_ts_ms, "", retries, "retransmit", "", payload_len])
+        if self.verbose:
+            print(f"[REL/retransmit] seq={seq} retries={retries}")
+        
+    def _log_tx_expire(self, seq: int, now_ts_ms: int, retries: int, payload_len: int, deadline_ms: Optional[int]) -> None:
+        if self.logger:
+            # ts, dir, channel, seq, send_ts_ms, rtt_ms, retries, event, deadline_t_ms, len_bytes
+            self.logger.write([now_ts_ms, "TX", "REL", seq, now_ts_ms, "", retries, "expire", (deadline_ms or ""), payload_len])
+        if self.verbose:
+            print(f"[REL/expire] seq={seq} retries={retries} deadline={deadline_ms}")
+
 
 

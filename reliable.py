@@ -37,7 +37,14 @@ class RttEstimator:
 
 class ReliableSender:
     # Tracks in-flight REL packets and retransmits on RTO.
-    def __init__(self, sock, peer: Tuple[str, int], rtt: RttEstimator):
+    def __init__(
+        self,
+        sock,
+        peer: Tuple[str, int],
+        rtt: RttEstimator,
+        log_retx_cb: Optional[Callable[[int, int, int, int], None]] = None,
+        log_expire_cb: Optional[Callable[[int, int, int, int, Optional[int]], None]] = None,
+    ):
         self.sock = sock
         self.peer = peer
         self.rtt = rtt
@@ -46,6 +53,9 @@ class ReliableSender:
         self._lock = threading.Lock()
         self._running = False
         self._thr = threading.Thread(target=self._loop, daemon=True)
+        self._log_retx_cb = log_retx_cb
+        self._log_expire_cb = log_expire_cb
+
 
     def start(self):
         self._running = True
@@ -79,6 +89,8 @@ class ReliableSender:
                 "retries": 0,
                 "first_ts": ts,
                 "urgency": max(0, int(urgency_ms)),
+                "deadline_ms": int(deadline_ms) if deadline_ms is not None else None,
+                "expiry_ts": (ts + int(deadline_ms)) if deadline_ms is not None else None,
             }
             return seq
 
@@ -99,14 +111,48 @@ class ReliableSender:
             now = now_ms()
             rto = self.rtt.rto_ms()
             with self._lock:
+                to_expire = []
+                to_retx = []
                 for seq, rec in list(self._inflight.items()):
+                    # 1) Expiry: stop retrying after per-packet deadline
+                    exp = rec.get("expiry_ts")
+                    if exp is not None and now >= exp:
+                        to_expire.append((seq, rec))
+                        continue
+                    # 2) RTO-based retransmission (existing behavior, urgency shortens wait)
                     deadline = rec["last_tx"] + max(80, rto - rec["urgency"])
                     if now >= deadline:
-                        ts = now_ms()
-                        pkt = pack_header(CHAN_RELIABLE, seq, ts) + rec["payload"]
-                        self.sock.sendto(pkt, self.peer)
+                        to_retx.append((seq, rec))
+
+            # Handle expirations outside the lock
+            for seq, rec in to_expire:
+                try:
+                    if self._log_expire_cb:
+                        # args: seq, now_ts, retries, payload_len, original_deadline_ms
+                        self._log_expire_cb(seq, now, rec.get("retries", 0), len(rec.get("payload", b"")), rec.get("deadline_ms"))
+                except Exception:
+                    pass
+                with self._lock:
+                    self._inflight.pop(seq, None)
+
+            # Handle retransmissions outside the lock
+            for seq, rec in to_retx:
+                try:
+                    ts = now_ms()
+                    pkt = pack_header(CHAN_RELIABLE, seq, ts) + rec["payload"]
+                    self.sock.sendto(pkt, self.peer)
+                    with self._lock:
                         rec["last_tx"] = ts
                         rec["retries"] += 1
+                    if self._log_retx_cb:
+                        try:
+                            # args: seq, send_ts_ms, retries, payload_len
+                            self._log_retx_cb(seq, ts, rec["retries"], len(rec["payload"]))
+                        except Exception:
+                            pass
+                except Exception:
+                    # swallow and continue; next tick will retry/expire
+                    pass
 
 class ReliableReceiver:
     # ACKs every REL packet; delivers in-order with a small reordering buffer.

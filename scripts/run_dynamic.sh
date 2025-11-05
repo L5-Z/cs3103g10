@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-9000}"
-T_STATIC_MS="${T_STATIC_MS:-200}"
 
 pick_free_udp_port() {
   python3 - <<'PY'
@@ -15,23 +14,18 @@ s.close()
 PY
 }
 
-# if 9000 is busy, pick a free one
 if ss -lun | awk '{print $5}' | grep -q ":${PORT}$"; then
   PORT="$(pick_free_udp_port)"
 fi
 
-# ensure logs dir exists
 mkdir -p logs
 
-# start receiver
-"${SCRIPT_DIR}/run_receiver.sh" --port "${PORT}" --t-mode static --t-static-ms "${T_STATIC_MS}" --log "${RLOG:-logs/receiver.csv}" &
+"${SCRIPT_DIR}/run_receiver.sh" --port "${PORT}" --t-mode dynamic --log "${RLOG:-logs/receiver.csv}" &
 RX_PID=$!
 
-# cleanup on exit/Ctrl-C
 cleanup() { kill "$RX_PID" 2>/dev/null || true; wait "$RX_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 sleep 0.3
 
-# run sender in foreground, pass same PORT
-"${SCRIPT_DIR}/run_sender.sh" --port "${PORT}" --t-mode static --t-static-ms "${T_STATIC_MS}" --log "${SLOG:-logs/sender.csv}" "$@"
+"${SCRIPT_DIR}/run_sender.sh" --port "${PORT}" --t-mode dynamic --log "${SLOG:-logs/sender.csv}" "$@"

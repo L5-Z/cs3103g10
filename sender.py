@@ -17,7 +17,11 @@ def main():
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    api = GameNetAPI(sock, log_path=args.log, t_mode=args.t_mode, t_static_ms=args.t_static_ms)
+    api = GameNetAPI(sock,
+                     log_path=args.log,
+                     t_mode=args.t_mode,
+                     t_static_ms=args.t_static_ms,
+                     verbose=args.verbose)
     api.set_peer((args.host, args.port))
 
     sent_total = 0

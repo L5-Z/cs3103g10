@@ -1,31 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Defaults; override via env 
 HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-5000}"
+PORT="${PORT:-9000}"
+DURATION="${DURATION:-10}"
 PPS="${PPS:-20}"
-RATIO="${RATIO:-0.5}"      # reliable ratio in [0..1]
-DURATION="${DURATION:-30}"
+REL_RATIO="${REL_RATIO:-0.7}"
 LOG="${LOG:-logs/sender.csv}"
+VERBOSE="${VERBOSE:-0}"
+T_MODE="${T_MODE:-dynamic}"        # static|dynamic
+T_STATIC_MS="${T_STATIC_MS:-200}"
 
-# QoL flags: --reliable-only sets RATIO=1.0, --unreliable-only sets RATIO=0.0
-ADDITIONAL_ARGS=()
-for arg in "$@"; do
-  case "$arg" in
-    --reliable-only)
-      RATIO="1.0"
-      ;;
-    --unreliable-only)
-      RATIO="0.0"
-      ;;
-    *)
-      ADDITIONAL_ARGS+=("$arg")
-      ;;
+mkdir -p "$(dirname "$LOG")"
+
+# CLI overrides
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host) HOST="$2"; shift 2;;
+    --port) PORT="$2"; shift 2;;
+    --duration) DURATION="$2"; shift 2;;
+    --pps) PPS="$2"; shift 2;;
+    --reliable-ratio) REL_RATIO="$2"; shift 2;;
+    --log) LOG="$2"; shift 2;;
+    --verbose) VERBOSE=1; shift;;
+    --t-mode) T_MODE="$2"; shift 2;;
+    --t-static-ms) T_STATIC_MS="$2"; shift 2;;
+    *) echo "Unknown arg: $1"; exit 2;;
   esac
 done
 
-mkdir -p "$(dirname "$LOG")"
-python3 sender.py --host "$HOST" --port "$PORT" \
-  --pps "$PPS" --reliable-ratio "$RATIO" --duration "$DURATION" \
-  --log "$LOG" "${ADDITIONAL_ARGS[@]}"
+exec python3 sender.py \
+  --host "${HOST}" \
+  --port "${PORT}" \
+  --duration "${DURATION}" \
+  --pps "${PPS}" \
+  --reliable-ratio "${REL_RATIO}" \
+  --log "${LOG}" \
+  $( [[ "${VERBOSE}" == "1" ]] && echo --verbose ) \
+  --t-mode "${T_MODE}" \
+  --t-static-ms "${T_STATIC_MS}"
