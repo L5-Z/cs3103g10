@@ -64,11 +64,15 @@ class GameNetAPI:
         log_path: Optional[str] = None,
         max_recv_size: int = 4096,
         verbose: bool = False,
+        t_mode: str = "dynamic",
+        t_static_ms: int = 200, 
         k_rttvar: float = 3.0,                 # weight for RTTVAR in adaptive-t
         t_min_ms: int = 120,                   # clamp low
         t_max_ms: int = 300,                   # clamp high
         max_urgency_ms: int = 50,             # cap for urgency hint
     ):
+        self.t_mode = str(t_mode)
+        self.t_static_ms = int(t_static_ms)
         self.verbose = verbose  
         self.sock = sock
         self.peer = peer  # must be set for sending & ACKs
