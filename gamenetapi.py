@@ -37,7 +37,6 @@ Extra Details
 """
 import socket
 import threading
-import time
 import struct
 from typing import Callable, Optional, Tuple
 

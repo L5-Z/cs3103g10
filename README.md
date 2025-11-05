@@ -6,8 +6,6 @@ CS3103 Assignment 4 mini-project: hybrid reliable/unreliable transport over UDP/
 
 ## 1. Things That Are Missing (To-Do)
 
-- **Gap timer (“skip-after-t”)** in `ReliableReceiver` to bound waiting on a missing sequence number.
-  - Target: **t ≈ 200 ms** (per assignment); when a gap is deemed too large, emit `action=skip` in the logs.
 - *(Optional)* Enrich charts/logs to visualize over time:
   - `buffer` (buffer occupancy)
   - `dup` (duplicate packets)
@@ -178,6 +176,32 @@ Logs will be written to:
 
 - `logs/sender.csv`
 - `logs/receiver.csv`
+
+### 3.3 Alternative
+
+Alternatively, use the provided static and dynamic script (On one terminal)
+```bash
+### Option A — Dynamic timer (adaptive, default)
+./scripts/run_dynamic.sh --verbose --duration 8 --pps 20 --reliable-ratio 0.7
+```
+
+```bash
+### Option B — Static Timer
++./scripts/run_static.sh --verbose --t-static-ms 200 --duration 8 --pps 20 --reliable-ratio 0.7
+```
+
+
+Provided are some more settings to play around
+```
+# Terminal A (receiver):
+./scripts/run_receiver.sh --verbose --t-mode dynamic
+
+# Terminal B (sender):
+./scripts/run_sender.sh --verbose --t-mode dynamic --duration 8 --pps 20 --reliable-ratio 0.7
+
+# Heavier reliable stream (all REL):
+./scripts/run_sender.sh --verbose --t-mode dynamic --duration 10 --pps 300 --reliable-ratio 1.0
+```
 
 ---
 
