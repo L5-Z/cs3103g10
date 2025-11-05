@@ -164,10 +164,17 @@ class ReliableReceiver:
         self.max_buf = 1024                                         # Adjustable Buffer
         self._lock = threading.Lock()                               # RX thread safety (GameNetAPI runs on a background thread)
         self.log_cb = log_cb
+        # --- gap timer state (skip-after-t) ---
+        self._gap_start_ms: Optional[int] = None
+        self._gap_deadline_ms: Optional[int] = None
+        self._gap_t_fn: Callable[[int], int] = lambda urgency_ms=0: 200
 
     def _log(self, ev: str, seq: int) -> None:
         if self.log_cb:
             self.log_cb(ev, seq)
+            
+    def set_gap_deadline_fn(self, fn: Callable[[int], int]) -> None:
+        self._gap_t_fn = fn
 
     def _advance_expected(self) -> None:
         # Move to next sequence number (modulo 2^16)
@@ -180,6 +187,15 @@ class ReliableReceiver:
             payload, _send_ts, _arr = self.buf.pop(self.expected_seq)
             self.deliver_cb(payload)
             self._advance_expected()
+            if self.expected_seq is not None:
+                ahead = [s for s in self.buf.keys() if self.in_window(self.expected_seq, s, self.max_buf)]
+                if ahead:
+                    now = now_ms()
+                    self._gap_start_ms = now
+                    self._gap_deadline_ms = now + int(self._gap_t_fn(0))
+                else:
+                    self._gap_start_ms = None
+                    self._gap_deadline_ms = None
     
     def seq_eq(self, a: int, b: int) -> bool:
         return ((a ^ b) & MASK16) == 0
@@ -203,7 +219,14 @@ class ReliableReceiver:
         arrival = now_ms()
 
         with self._lock:
-            # First packet: initialize expected_seq, deliver, then drain.
+
+            if self._gap_deadline_ms is not None and arrival >= self._gap_deadline_ms and self.expected_seq is not None:
+                have_ahead = any(self.in_window(self.expected_seq, s, self.max_buf) for s in self.buf.keys())
+                if have_ahead:
+                    self._log("skip", self.expected_seq)
+                    self._advance_expected()
+                    self._drain_in_order()
+
             if self.expected_seq is None:
                 self.expected_seq = seq
                 self.deliver_cb(payload)
@@ -212,7 +235,6 @@ class ReliableReceiver:
                 self._drain_in_order()
                 return
 
-            # In-order arrival → deliver and drain.
             if self.seq_eq(seq, self.expected_seq):
                 self.deliver_cb(payload)
                 self._log("deliver", seq)
@@ -220,12 +242,13 @@ class ReliableReceiver:
                 self._drain_in_order()
                 return
 
-            # Ahead-of-gap arrival → buffer if within window and not already buffered.
             if self.seq_less(self.expected_seq, seq):
                 if seq not in self.buf and self.in_window(self.expected_seq, seq, self.max_buf):
                     self.buf[seq] = (payload, send_ts_ms, arrival)
                     self._log("buffer", seq)
-                # else: too far ahead or duplicate in buffer then drop silently
+                    if self._gap_start_ms is None:
+                        self._gap_start_ms = arrival
+                        self._gap_deadline_ms = arrival + int(self._gap_t_fn(0))
                 return
 
             # Behind/duplicate arrival already delivered; drop.

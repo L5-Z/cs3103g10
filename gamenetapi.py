@@ -108,7 +108,14 @@ class GameNetAPI:
         # once we expose a setter in ReliableReceiver, hook it up safely:
         if hasattr(self.reliable_receiver, "set_gap_deadline_fn"):
             try:
-                self.reliable_receiver.set_gap_deadline_fn(self._compute_dynamic_t)
+                # Respect current timer mode for the receiver's gap timer.
+                if getattr(self, "t_mode", "dynamic") == "static":
+                    def _static_gap_t(_urg=0, _self=self):
+                        return int(getattr(_self, "t_static_ms", 200))
+                    self.reliable_receiver.set_gap_deadline_fn(_static_gap_t)
+                else:
+                    # dynamic uses the same EWMA-based function as the sender
+                    self.reliable_receiver.set_gap_deadline_fn(self._compute_dynamic_t)
             except Exception:
                 pass  # stay compatible even if method exists but signature differs
 
