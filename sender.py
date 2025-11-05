@@ -1,6 +1,7 @@
 import argparse, socket, time, random
 from utilities import make_mock_game_data
 from gamenetapi import GameNetAPI
+from tools.demologger import DemoLogger
 
 def main():
     ap = argparse.ArgumentParser()
@@ -16,8 +17,9 @@ def main():
 
     args = ap.parse_args()
 
+    demo_logger = DemoLogger()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    api = GameNetAPI(sock, log_path=args.log)
+    api = GameNetAPI(sock, sender_logger=demo_logger, log_path=args.log)
     api.set_peer((args.host, args.port))
 
     # --- static-t override for testing ---
@@ -46,8 +48,9 @@ def main():
         next_send = time.time()
         while time.time() < end_time:
             reliable = (random.random() < args.reliable_ratio)
-            payload = make_mock_game_data(i)
+            payload, timestamp = make_mock_game_data(i)
             api.send(payload, reliable=reliable, urgency_ms=0)
+            demo_logger.log_sent_packet_info(i, reliable, timestamp)
 
             sent_total += 1
             if reliable:
@@ -65,6 +68,11 @@ def main():
                 next_send = time.time()
     finally:
         api.stop()
+        demo_logger.serialize_reliable_sent_set()
+        demo_logger.print_current_statistics_sender_side()
+        demo_logger.api_print_current_statistics_sender_side()
+ 
 
 if __name__ == "__main__":
     main()
+

@@ -33,4 +33,4 @@ def make_payload(custom_header, mock_game_data):
 
 def make_mock_game_data(i):
     obj = {"i": i, "ts": (int(time.time()*1000) % (2**32)), "x": random.random(), "y": random.random()}
-    return json.dumps(obj).encode("utf-8")
+    return json.dumps(obj).encode("utf-8"), obj["ts"]

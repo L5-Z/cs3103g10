@@ -3,6 +3,7 @@ import struct
 import threading
 import time
 from typing import Callable, Optional, Tuple, Dict
+from tools.demologger import DemoLogger
 
 from header import pack_header, now_ms, CHAN_RELIABLE
 
@@ -33,14 +34,17 @@ def rto_ms() -> int:
 
 class ReliableSender:
     # Tracks in-flight REL packets and retransmits on RTO.
-    def __init__(self, sock, peer: Tuple[str, int]):
+    def __init__(self, sock, peer: Tuple[str, int], sender_logger:Optional[DemoLogger]=None):
         self.sock = sock
         self.peer = peer
+        self.sender_logger = sender_logger
         self._seq = 0
         self._inflight: Dict[int, Dict] = {}
         self._lock = threading.Lock()
         self._running = False
         self._thr = threading.Thread(target=self._loop, daemon=True)
+        self.seen_rel = set()
+
 
     def start(self):
         self._running = True
@@ -76,12 +80,18 @@ class ReliableSender:
                 "urgency": max(0, int(urgency_ms)),
                 "deadline": deadline_ms,
             }
+            if self.sender_logger is not None:
+                self.sender_logger.api_log_sent_packet_info(seq, CHAN_RELIABLE, ts)
+                self.sender_logger.api_track_sent_packet(seq)
             return seq
 
     def on_ack(self, seq: int, echo_ts_ms: int):
         now32   = now_ms() & 0xFFFFFFFF
         send32  = echo_ts_ms & 0xFFFFFFFF
         sample  = (now32 - send32) & 0xFFFFFFFF
+
+        if self.sender_logger is not None:
+            self.sender_logger.api_log_ack_received(seq, now32, send32, sample)
 
         if sample <= 10_000:
             self.rtt.update(sample)
@@ -101,19 +111,23 @@ class ReliableSender:
                         ts = now_ms()
                         pkt = pack_header(CHAN_RELIABLE, seq, ts) + rec["payload"]
                         self.sock.sendto(pkt, self.peer)
+                        if self.sender_logger is not None:
+                            self.sender_logger.api_log_sent_packet_info(seq, CHAN_RELIABLE, ts)
                         rec["last_tx"] = ts
                         rec["retries"] += 1
 
 class ReliableReceiver:
     # ACKs every REL packet; delivers in-order with a small reordering buffer.
-    def __init__(self, deliver_cb: Callable[[bytes], None], send_ack_cb: Callable[[int, int], None], log_cb: Optional[Callable[[str, int], None]] = None):
+    def __init__(self, deliver_cb: Callable[[bytes], None], send_ack_cb: Callable[[int, int], None], log_cb: Optional[Callable[[str, int], None]] = None, receiver_logger:Optional[DemoLogger]= None):
         self.deliver_cb = deliver_cb
         self.send_ack_cb = send_ack_cb
+        self.receiver_logger = receiver_logger
         self.expected_seq: Optional[int] = None
         self.buf: Dict[int, Tuple[bytes, int, int]] = {}            # Reordering buffer: seq -> (payload, send_ts_ms, arrival_ms)
         self.max_buf = 1024                                         # Adjustable Buffer
         self._lock = threading.Lock()                               # RX thread safety (GameNetAPI runs on a background thread)
         self.log_cb = log_cb
+        self.seen_rel = set()
 
     def _log(self, ev: str, seq: int) -> None:
         if self.log_cb:
@@ -148,9 +162,20 @@ class ReliableReceiver:
         return 0 < d <= win
 
     def on_packet(self, seq: int, send_ts_ms: int, payload: bytes) -> None:
+        with self._lock: 
+            if seq in self.seen_rel:
+                self._log("dup", seq) 
+                if self.receiver_logger is not None:
+                    pass 
+                    
+                return
+        
         # Always ACK immediately so sender RTT/RTO keeps working.
         self.send_ack_cb(seq, send_ts_ms)
         arrival = now_ms()
+        if self.receiver_logger is not None:
+            self.receiver_logger.api_log_ack_sent(seq)
+            self.receiver_logger.api_log_received_packet_info(seq, CHAN_RELIABLE, send_ts_ms, arrival)
 
         with self._lock:
             # First packet: initialize expected_seq, deliver, then drain.

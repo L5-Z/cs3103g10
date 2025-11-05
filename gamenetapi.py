@@ -40,6 +40,7 @@ import threading
 import time
 import struct
 from typing import Callable, Optional, Tuple
+from tools.demologger import DemoLogger
 
 from header import (
     CHAN_RELIABLE, CHAN_UNRELIABLE, CHAN_ACK,
@@ -60,6 +61,8 @@ class GameNetAPI:
         self,
         sock: socket.socket,
         peer: Optional[Tuple[str,int]] = None,
+        sender_logger:Optional[DemoLogger] = None,
+        receiver_logger:Optional[DemoLogger] =None ,
         log_path: Optional[str] = None,
         max_recv_size: int = 4096,
         verbose: bool = False,
@@ -83,6 +86,10 @@ class GameNetAPI:
         # logging
         self.logger = Logger(log_path) if log_path else None
 
+        # for logging during demo and sanity check
+        self.sender_logger = sender_logger
+        self.receiver_logger = receiver_logger
+
         # store adaptive-t config
         self.k_rttvar = float(k_rttvar)
         self.t_min_ms = int(t_min_ms)
@@ -95,7 +102,7 @@ class GameNetAPI:
         self.reliable_sender: Optional[ReliableSender] = None
         
         # optionally pass deadline function down to receiver
-        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event)
+        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event, receiver_logger=self.receiver_logger)
 
         # once we expose a setter in ReliableReceiver, hook it up safely:
         if hasattr(self.reliable_receiver, "set_gap_deadline_fn"):
@@ -132,7 +139,7 @@ class GameNetAPI:
         # Explicitly set the remote peer (used for send & ACK).
         self.peer = peer
         if self.reliable_sender is None:
-            self.reliable_sender = ReliableSender(self.sock, self.peer)
+            self.reliable_sender = ReliableSender(self.sock, self.peer, sender_logger=self.sender_logger)
 
     def start(self) -> None:
         # Start background RX thread (and reliable sender if we have a peer).
@@ -176,9 +183,13 @@ class GameNetAPI:
         else:
             pkt = pack_header(CHAN_UNRELIABLE, 0, now_ms()) + payload
             self.sock.sendto(pkt, self.peer)
+            if self.sender_logger is not None:
+                self.sender_logger.api_log_sent_unreliable_packet()
+
             self._tx_unrel += 1
             if self.logger:
                 self.logger.write([now_ms(), "TX", "UNREL", "", now_ms(), "", 0, "send", "", len(payload)])
+
 
     def stats(self) -> dict:
         return {
