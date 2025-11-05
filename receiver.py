@@ -1,5 +1,6 @@
 import argparse, socket, time, json
 from gamenetapi import GameNetAPI
+from tools.demologger import DemoLogger
 
 def main():
     ap = argparse.ArgumentParser()
@@ -14,7 +15,9 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((args.bind, args.port))
 
-    api = GameNetAPI(sock, log_path=args.log, verbose=args.verbose)
+    demo_logger = DemoLogger()
+
+    api = GameNetAPI(sock, log_path=args.log, verbose=args.verbose, receiver_logger=demo_logger)
     if args.peer_host and args.peer_port:
         api.set_peer((args.peer_host, args.peer_port))
 
@@ -30,6 +33,7 @@ def main():
         # app-layer handling for unreliable messages
         try:
             obj = json.loads(b.decode("utf-8"))
+            demo_logger.log_received_unreliable_packet()
             print(f"[UNR] i={obj.get('i')} ts={obj.get('ts')} x={obj.get('x'):.3f} y={obj.get('y'):.3f}")
         except Exception:
             print(f"[UNR] {len(b)} bytes")
@@ -45,7 +49,12 @@ def main():
         pass
     finally:
         api.stop()
+        demo_logger.print_current_statistics_receiver_side()
+        demo_logger.read_reliable_sent_set()
+        demo_logger.print_sent_but_not_received_packets()
+
 
 if __name__ == "__main__":
     main()
+
 
