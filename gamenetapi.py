@@ -49,7 +49,6 @@ from logger import Logger
 from reliable import (
     ReliableSender,
     ReliableReceiver,
-    RttEstimator,
 )
 
 
@@ -86,8 +85,6 @@ class GameNetAPI:
         self.logger = Logger(log_path) if log_path else None
 
         # RTT estimation (shared with reliable sender)
-        self.rtt = RttEstimator()
-
         self.srtt: Optional[float] = None
         self.rttvar: Optional[float] = None
         # ADDED to own RTT state
@@ -169,7 +166,7 @@ class GameNetAPI:
         self.peer = peer
         if self.peer and self.reliable_sender is None:
             self.reliable_sender = ReliableSender(
-                self.sock, self.peer, self.rtt, get_rto_ms=self.get_rto_ms, # ReliableSender must accept get_rto_ms
+                self.sock, self.peer, self.get_rto_ms, # ReliableSender must accept get_rto_ms
                 log_retx_cb=self._log_tx_retransmit,
                 log_expire_cb=self._log_tx_expire
             )
@@ -178,7 +175,7 @@ class GameNetAPI:
         # Start background RX thread (and reliable sender if we have a peer).
         if self.peer and self.reliable_sender is None:
             self.reliable_sender = ReliableSender(
-                self.sock, self.peer, self.rtt, get_rto_ms=self.get_rto_ms, # ReliableSender must accept get_rto_ms
+                self.sock, self.peer, self.get_rto_ms, # ReliableSender must accept get_rto_ms
                 log_retx_cb=self._log_tx_retransmit,
                 log_expire_cb=self._log_tx_expire
             )
@@ -206,7 +203,7 @@ class GameNetAPI:
         if reliable:
             if self.reliable_sender is None:
                 self.reliable_sender = ReliableSender(
-                    self.sock, self.peer, self.rtt, get_rto_ms=self.get_rto_ms, # ReliableSender must accept get_rto_ms
+                    self.sock, self.peer, self.get_rto_ms, # ReliableSender must accept get_rto_ms
                     log_retx_cb=self._log_tx_retransmit,
                     log_expire_cb=self._log_tx_expire
                 )
@@ -295,8 +292,11 @@ class GameNetAPI:
         - Fallback when we don't have SRTT yet: assume the default base (200ms) and rttvar ~ base/2.
         """
         # Pull current estimates
-        srtt = self.srtt if self.srtt is not None else 200.0
-        rttvar = self.rttvar if self.rttvar is not None else 100.0
+        if self.srtt is None or self.rttvar is None:
+            return int(200)
+        else:
+            srtt = self.srtt
+            rttvar = self.rttvar
 
         #if srtt is None or rttvar is None:
         #    srtt, rttvar = 200.0, 100.0 # use defaults at the start

@@ -76,8 +76,8 @@ class ReliableSender:
         send32  = echo_ts_ms & 0xFFFFFFFF
         sample  = (now32 - send32) & 0xFFFFFFFF
 
-        if sample <= 10_000:
-            self.rtt.update(sample)
+        #if sample <= 10_000:
+        #    self.rtt.update(sample)
 
         with self._lock:
             self._inflight.pop(seq, None)
