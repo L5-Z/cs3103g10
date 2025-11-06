@@ -132,22 +132,26 @@ class GameNetAPI:
         self._rx_ack = 0
     
     # ---------------- RTT update (single source) ----------------
-    def update(self, sample_ms: float) -> None:
+    # EWMA update owned here (called when an ACK sample arrives)
+    def update_rtt(self, sample_ms: float) -> None:
         x = float(sample_ms)
-        if self.srtt is None:
+        alpha, beta = 0.125, 0.25 # 1/8 and 1/4
+        if self.srtt is None or self.rttvar is None:
             self.srtt = x
             self.rttvar = x / 2.0
         else:
-            alpha, beta = 0.125, 0.25
             err = x - self.srtt
             self.srtt += alpha * err
-            self.rttvar = (1.0 - beta) * self.rttvar + beta * abs(err)  
-            
-        # Keep the original estimator in sync (don’t break callers that still read it)
-        try:
-            self.rtt.update(x)
-        except Exception:
-            pass
+            self.rttvar = (1.0 - beta) * self.rttvar + beta * abs(err)
+        if self.verbose:
+            print(f"[RTT/update] sample={x:.1f}ms srtt={self.srtt:.1f} rttvar={self.rttvar:.1f}")
+
+    # canonical RTO from the same srtt/rttvar
+    def get_rto_ms(self) -> int:
+        if self.srtt is None or self.rttvar is None:
+            return 200
+        rto = self.srtt + self._k_rto * self.rttvar
+        return int(max(self._rto_min, min(self._rto_max, rto)))
 
     # ---------------- Public Facing API ----------------
 
@@ -257,27 +261,6 @@ class GameNetAPI:
             "t_max_ms": self.t_max_ms, # expose for debugging
             "k_rttvar": self.k_rttvar,
         }
-    
-    # EWMA update owned here (called when an ACK sample arrives)
-    def update_rtt(self, sample_ms: float) -> None:
-        x = float(sample_ms)
-        alpha, beta = 0.125, 0.25 # 1/8 and 1/4
-        if self.srtt is None or self.rttvar is None:
-            self.srtt = x
-            self.rttvar = x / 2.0
-        else:
-            err = x - self.srtt
-            self.srtt += alpha * err
-            self.rttvar = (1.0 - beta) * self.rttvar + beta * abs(err)
-        if self.verbose:
-            print(f"[RTT/update] sample={x:.1f}ms srtt={self.srtt:.1f} rttvar={self.rttvar:.1f}")
-
-    # canonical RTO from the same srtt/rttvar
-    def get_rto_ms(self) -> int:
-        if self.srtt is None or self.rttvar is None:
-            return 200
-        rto = self.srtt + self._k_rto * self.rttvar
-        return int(max(self._rto_min, min(self._rto_max, rto)))
 
     # ---------------- Internal ----------------
 
