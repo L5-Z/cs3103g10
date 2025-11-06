@@ -87,7 +87,6 @@ class GameNetAPI:
         # RTT estimation (shared with reliable sender)
         self.srtt: Optional[float] = None
         self.rttvar: Optional[float] = None
-        # ADDED to own RTT state
         self._k_rto: float = 4.0         # classic Jacobson/Karels for RTO
         self._rto_min: int = 120         # ms
         self._rto_max: int = 600         # ms
@@ -131,7 +130,7 @@ class GameNetAPI:
         self._tx_unrel = 0
         self._rx_ack = 0
     
-    # ---------------- RTT update (single source) ----------------
+    # ---------------- RTT update (single source, public facing) ----------------
     # EWMA update owned here (called when an ACK sample arrives)
     def update_rtt(self, sample_ms: float) -> None:
         x = float(sample_ms)
