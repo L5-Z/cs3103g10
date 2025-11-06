@@ -51,7 +51,7 @@ def main():
                 sent_rel += 1
             if args.verbose and (sent_total % max(1, args.print_every) == 0):
                 rel_pct = 100.0 * sent_rel / max(1, sent_total)
-                print(f"[SEND] total={sent_total} reliable={sent_rel} ({rel_pct:.1f}%)")
+                print(f"[SEND] total={sent_total} reliable={sent_rel} ({rel_pct:.1f}% reliable)")
 
             i += 1
             next_send += interval
