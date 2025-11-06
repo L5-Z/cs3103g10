@@ -12,42 +12,19 @@ HALF_SEQ = MAX_SEQ >> 1
 MASK16   = MAX_SEQ - 1
 
 
-class RttEstimator:
-    # Keeps SRTT/RTTVAR; provides bounded RTO in ms.
-    def __init__(self):
-        self.srtt: Optional[float] = None
-        self.rttvar: Optional[float] = None
-        self._k = 4.0
-
-    def update(self, sample_ms: float):
-        if self.srtt is None:
-            self.srtt = float(sample_ms)
-            self.rttvar = self.srtt / 2.0
-            return
-        alpha, beta = 0.125, 0.25
-        err = float(sample_ms) - self.srtt
-        self.srtt += alpha * err
-        self.rttvar = (1 - beta) * self.rttvar + beta * abs(err)
-
-    def rto_ms(self) -> int:
-        if self.srtt is None or self.rttvar is None:
-            return 200
-        rto = self.srtt + self._k * self.rttvar
-        return int(max(120, min(600, rto)))
-
 class ReliableSender:
     # Tracks in-flight REL packets and retransmits on RTO.
     def __init__(
         self,
         sock,
         peer: Tuple[str, int],
-        rtt: RttEstimator,
+        get_rto_ms: Callable[[], int],
         log_retx_cb: Optional[Callable[[int, int, int, int], None]] = None,
         log_expire_cb: Optional[Callable[[int, int, int, int, Optional[int]], None]] = None,
     ):
         self.sock = sock
         self.peer = peer
-        self.rtt = rtt
+        self.rtt = get_rto_ms
         self._seq = 0
         self._inflight: Dict[int, Dict] = {}
         self._lock = threading.Lock()
@@ -109,7 +86,7 @@ class ReliableSender:
         while self._running:
             time.sleep(0.01)
             now = now_ms()
-            rto = self.rtt.rto_ms()
+            rto = self.rtt()
             with self._lock:
                 to_expire = []
                 to_retx = []

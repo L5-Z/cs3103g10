@@ -90,6 +90,10 @@ class GameNetAPI:
 
         self.srtt: Optional[float] = None
         self.rttvar: Optional[float] = None
+        # ADDED to own RTT state
+        self._k_rto: float = 4.0         # classic Jacobson/Karels for RTO
+        self._rto_min: int = 120         # ms
+        self._rto_max: int = 600         # ms
 
         # store adaptive-t config
         self.k_rttvar = float(k_rttvar)
@@ -165,7 +169,7 @@ class GameNetAPI:
         self.peer = peer
         if self.peer and self.reliable_sender is None:
             self.reliable_sender = ReliableSender(
-                self.sock, self.peer, self.rtt,
+                self.sock, self.peer, self.rtt, get_rto_ms=self.get_rto_ms, # ReliableSender must accept get_rto_ms
                 log_retx_cb=self._log_tx_retransmit,
                 log_expire_cb=self._log_tx_expire
             )
@@ -174,7 +178,7 @@ class GameNetAPI:
         # Start background RX thread (and reliable sender if we have a peer).
         if self.peer and self.reliable_sender is None:
             self.reliable_sender = ReliableSender(
-                self.sock, self.peer, self.rtt,
+                self.sock, self.peer, self.rtt, get_rto_ms=self.get_rto_ms, # ReliableSender must accept get_rto_ms
                 log_retx_cb=self._log_tx_retransmit,
                 log_expire_cb=self._log_tx_expire
             )
@@ -202,30 +206,25 @@ class GameNetAPI:
         if reliable:
             if self.reliable_sender is None:
                 self.reliable_sender = ReliableSender(
-                    self.sock, self.peer, self.rtt,
+                    self.sock, self.peer, self.rtt, get_rto_ms=self.get_rto_ms, # ReliableSender must accept get_rto_ms
                     log_retx_cb=self._log_tx_retransmit,
                     log_expire_cb=self._log_tx_expire
                 )
                 self.reliable_sender.start()
         
             # compute per-packet deadline 't' based on mode (for EVERY send)
-            mode = getattr(self, "t_mode", "dynamic")
             try:
-                if mode == "static":
-                    t = int(getattr(self, "t_static_ms", 200))
-                else:
-                    t = int(self._compute_dynamic_t(urgency_ms))
+                t = self._compute_dynamic_t(urgency_ms) if self.t_mode == "dynamic" else self.t_static_ms
             except Exception:
                 t = int(self._compute_dynamic_t(urgency_ms))
             # defensive clamp
             t = max(self.t_min_ms, min(self.t_max_ms, t))
-            deadline_t_ms = t
 
             # Pass deadline to sender
             seq = self.reliable_sender.send(
                 payload,
                 urgency_ms=urgency_ms,
-                deadline_ms=deadline_t_ms
+                deadline_ms=t
             )
 
             if self.verbose:
@@ -233,14 +232,14 @@ class GameNetAPI:
                 srtt_disp = f"{self.srtt:.1f}" if self.srtt is not None else "NA"
                 rttv_disp = f"{self.rttvar:.1f}" if self.rttvar is not None else "NA"
                 try:
-                    print(f"[REL/send] seq={seq} mode={self.t_mode} t={deadline_t_ms}ms srtt={srtt_disp} rttvar={rttv_disp}")
+                    print(f"[REL/send] seq={seq} mode={self.t_mode} t={t}ms srtt={srtt_disp} rttvar={rttv_disp}")
                 except Exception:
                     pass
 
 
             self._tx_rel += 1
             if self.logger:
-                self.logger.write([now_ms(), "TX", "REL", seq, now_ms(), "", 0, "send", deadline_t_ms, len(payload)])
+                self.logger.write([now_ms(), "TX", "REL", seq, now_ms(), "", 0, "send", t, len(payload)])
         else:
             pkt = pack_header(CHAN_UNRELIABLE, 0, now_ms()) + payload
             self.sock.sendto(pkt, self.peer)
@@ -261,6 +260,27 @@ class GameNetAPI:
             "t_max_ms": self.t_max_ms, # expose for debugging
             "k_rttvar": self.k_rttvar,
         }
+    
+    # EWMA update owned here (called when an ACK sample arrives)
+    def update_rtt(self, sample_ms: float) -> None:
+        x = float(sample_ms)
+        alpha, beta = 0.125, 0.25 # 1/8 and 1/4
+        if self.srtt is None or self.rttvar is None:
+            self.srtt = x
+            self.rttvar = x / 2.0
+        else:
+            err = x - self.srtt
+            self.srtt += alpha * err
+            self.rttvar = (1.0 - beta) * self.rttvar + beta * abs(err)
+        if self.verbose:
+            print(f"[RTT/update] sample={x:.1f}ms srtt={self.srtt:.1f} rttvar={self.rttvar:.1f}")
+
+    # canonical RTO from the same srtt/rttvar
+    def get_rto_ms(self) -> int:
+        if self.srtt is None or self.rttvar is None:
+            return 200
+        rto = self.srtt + self._k_rto * self.rttvar
+        return int(max(self._rto_min, min(self._rto_max, rto)))
 
     # ---------------- Internal ----------------
 
@@ -275,19 +295,19 @@ class GameNetAPI:
         - Fallback when we don't have SRTT yet: assume the default base (200ms) and rttvar ~ base/2.
         """
         # Pull current estimates
-        srtt = self.srtt
-        rttvar = self.rttvar
+        srtt = self.srtt if self.srtt is not None else 200.0
+        rttvar = self.rttvar if self.rttvar is not None else 100.0
 
-        if srtt is None or rttvar is None:
-            srtt, rttvar = 200.0, 100.0 # use defaults at the start
+        #if srtt is None or rttvar is None:
+        #    srtt, rttvar = 200.0, 100.0 # use defaults at the start
 
         k = self.k_rttvar
         u = max(0, min(int(urgency_ms), self.max_urgency_ms))
 
         # from formula 
-        est = float(srtt) + k * float(rttvar) + float(u)
-        est = max(self.t_min_ms, min(est, self.t_max_ms))
-        return int(est)
+        t = float(srtt) + k * float(rttvar) + float(u)
+        t = max(self.t_min_ms, min(t, self.t_max_ms))
+        return int(t)
 
     def _deliver_reliable(self, app_payload: bytes) -> None:
         if self.onReliable:
@@ -355,7 +375,7 @@ class GameNetAPI:
                     rtt_ms = float((now32 - (echo_ts & 0xFFFFFFFF)) & 0xFFFFFFFF)
                     # single-source update
                     try:
-                        self.update(rtt_ms)
+                        self.update_rtt(rtt_ms)
                     except Exception:
                         pass
 
