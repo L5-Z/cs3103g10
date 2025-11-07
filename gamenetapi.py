@@ -134,6 +134,10 @@ class GameNetAPI:
     # EWMA update owned here (called when an ACK sample arrives)
     def update_rtt(self, sample_ms: float) -> None:
         x = float(sample_ms)
+
+        if sample_ms < 1.0:
+            x = 1.0  # clamp very low samples
+            
         alpha, beta = 0.125, 0.25 # 1/8 and 1/4
         if self.srtt is None or self.rttvar is None:
             self.srtt = x
