@@ -4,14 +4,12 @@ CS3103 Assignment 4 mini-project: hybrid reliable/unreliable transport over UDP/
 
 ---
 
-## 1. Things That Are Missing (To-Do)
+## 1. Group Members
+1. MUHAMMAD ALFAATIH BIN MOHAMED FAIZAL 
+2. TADLAOUI AIDA 
+3. TEE CHU JIE 
+4. TOH LEONG CHUAN 
 
-- *(Optional)* Enrich charts/logs to visualize over time:
-  - `buffer` (buffer occupancy)
-  - `dup` (duplicate packets)
-  - `skip` (gap skips)
-
----
 
 ## 2. Apply Network Impairment (tc netem on Loopback)
 
@@ -156,20 +154,24 @@ With your chosen `tc netem` configuration already applied (Section 2), use two t
 
 ```bash
 # Terminal A (receiver):
-./scripts/run_receiver.sh --verbose --t-mode dynamic
+python3 receiver.py --bind 127.0.0.1 --port 9000 --log logs/receiver.csv --verbose
 ```
 
 ### 3.2 Start Sender
 
 ```bash
 # Terminal B (sender):
-./scripts/run_sender.sh --verbose --t-mode dynamic --duration 8 --pps 20 --reliable-ratio 0.7
+python3 sender.py --host 127.0.0.1 --port 9000 \
+  --log logs/sender.csv --verbose --print-every 1 \
+  --t-mode dynamic --duration 8 --pps 20 --reliable-ratio 0.7
 ```
 
 Alternative sender configuration (heavier reliable stream):
 
 ```bash
-./scripts/run_sender.sh --reliable-only --pps 300 --duration 10 --verbose --print-every 1
+python3 sender.py --host 127.0.0.1 --port 9000 \
+  --log logs/sender.csv --verbose --print-every 1 \
+  --t-mode dynamic --reliable-only --pps 300 --duration 10
 ```
 
 Logs will be written to:
@@ -179,22 +181,12 @@ Logs will be written to:
 
 ### 3.3 Alternative
 
-Alternatively, use the provided static and dynamic script (On one terminal)
-```bash
-### Option A — Dynamic timer (adaptive, default)
-./scripts/run_dynamic.sh --verbose --duration 8 --pps 20 --reliable-ratio 0.7
-```
-
-```bash
-### Option B — Static Timer
-./scripts/run_static.sh --verbose --t-static-ms 200 --duration 8 --pps 20 --reliable-ratio 0.7
-```
-
-
 Provided are some more settings to play around
 ```bash
 # Heavier reliable stream (all REL):
-./scripts/run_sender.sh --verbose --t-mode dynamic --duration 10 --pps 300 --reliable-ratio 1.0
+python3 sender.py --host 127.0.0.1 --port 9000 \
+  --log logs/sender.csv --verbose --print-every 1 \
+  --t-mode dynamic --duration 10 --pps 300 --reliable-ratio 1.0
 ```
 
 ---
@@ -226,16 +218,19 @@ Configure `ReliableReceiver` to use a fixed gap timer of `t = 200 ms`, then (wit
 
 ```bash
 # Terminal A
-./scripts/run_receiver.sh
+python3 receiver.py --bind 127.0.0.1 --port 9000 --log logs/receiver.csv --verbose
 
 # Terminal B
-./scripts/run_sender.sh
+python3 sender.py --host 127.0.0.1 --port 9000 \
+  --log logs/sender.csv --verbose --print-every 1 \
+  --t-mode static --t-static-ms 200 --duration 8 --pps 20 --reliable-ratio 0.7
 ```
 
-Save the sender log:
+Save the sender and receiver log:
 
 ```bash
 mv logs/sender.csv logs/sender_static.csv
+mv logs/receiver.csv logs/receiver_static.csv
 ```
 
 ### 5.2 Run with Dynamic t
@@ -244,16 +239,19 @@ Rebuild or reconfigure `ReliableReceiver` to use the **dynamic** gap timer logic
 
 ```bash
 # Terminal A
-./scripts/run_receiver.sh
+python3 receiver.py --bind 127.0.0.1 --port 9000 --log logs/receiver.csv --verbose
 
 # Terminal B
-./scripts/run_sender.sh
+python3 sender.py --host 127.0.0.1 --port 9000 \
+  --log logs/sender.csv --verbose --print-every 1 \
+  --t-mode dynamic --duration 8 --pps 20 --reliable-ratio 0.7
 ```
 
-Save the new sender log:
+Save the new sender and receiver log:
 
 ```bash
 mv logs/sender.csv logs/sender_dynamic.csv
+mv logs/receiver.csv logs/receiver_dynamic.csv
 ```
 
 ### 5.3 Generate Comparison Charts
