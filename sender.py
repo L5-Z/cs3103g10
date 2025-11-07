@@ -12,12 +12,16 @@ def main():
     ap.add_argument("--log", default="logs/sender.csv", help="Sender-side transport log")
     ap.add_argument("--verbose", action="store_true", help="Print send/ACK progress")
     ap.add_argument("--print-every", type=int, default=20, help="Print a status line every N sends (when --verbose)")
-    #ap.add_argument("--static-t", type=int, default=200, help="If set, forces a static t timeout (ms) instead of adaptive (e.g. 200).")
-
+    ap.add_argument("--t-mode", choices=["static","dynamic"], default="dynamic", help="Timer mode for deadlines")
+    ap.add_argument("--t-static-ms", type=int, default=200, help="Static t (ms) when --t-mode=static")
     args = ap.parse_args()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    api = GameNetAPI(sock, log_path=args.log)
+    api = GameNetAPI(sock,
+                     log_path=args.log,
+                     t_mode=args.t_mode,
+                     t_static_ms=args.t_static_ms,
+                     verbose=args.verbose)
     api.set_peer((args.host, args.port))
 
     # --- static-t override for testing ---
@@ -54,7 +58,7 @@ def main():
                 sent_rel += 1
             if args.verbose and (sent_total % max(1, args.print_every) == 0):
                 rel_pct = 100.0 * sent_rel / max(1, sent_total)
-                print(f"[SEND] total={sent_total} reliable={sent_rel} ({rel_pct:.1f}%)")
+                print(f"[SEND] total={sent_total} reliable={sent_rel} ({rel_pct:.1f}% reliable)")
 
             i += 1
             next_send += interval

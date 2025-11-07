@@ -37,7 +37,6 @@ Extra Details
 """
 import socket
 import threading
-import time
 import struct
 from typing import Callable, Optional, Tuple
 
@@ -63,6 +62,8 @@ class GameNetAPI:
         log_path: Optional[str] = None,
         max_recv_size: int = 4096,
         verbose: bool = False,
+        t_mode: str = "dynamic",
+        t_static_ms: int = 200, 
         k_rttvar: float = 3.0,                 # weight for RTTVAR in adaptive-t
         t_min_ms: int = 120,                   # clamp low
         t_max_ms: int = 300,                   # clamp high
@@ -70,6 +71,8 @@ class GameNetAPI:
         srtt: Optional[float] = None,
         rttvar: Optional[float] = None,
     ):
+        self.t_mode = str(t_mode)
+        self.t_static_ms = int(t_static_ms)
         self.verbose = verbose  
         self.sock = sock
         self.peer = peer  # must be set for sending & ACKs
@@ -83,6 +86,13 @@ class GameNetAPI:
         # logging
         self.logger = Logger(log_path) if log_path else None
 
+        # RTT estimation (shared with reliable sender)
+        self.srtt: Optional[float] = None
+        self.rttvar: Optional[float] = None
+        self._k_rto: float = 4.0         # classic Jacobson/Karels for RTO
+        self._rto_min: int = 120         # ms
+        self._rto_max: int = 600         # ms
+
         # store adaptive-t config
         self.k_rttvar = float(k_rttvar)
         self.t_min_ms = int(t_min_ms)
@@ -91,16 +101,24 @@ class GameNetAPI:
         self.srtt = srtt
         self.rttvar = rttvar
         
-        # channels
-        self.reliable_sender: Optional[ReliableSender] = None
-        
-        # optionally pass deadline function down to receiver
-        self.reliable_receiver = ReliableReceiver(self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event)
+        # channels (defer ReliableSender until peer is known)
+        self.reliable_sender = None
+        # receiver is fine to construct now
+        self.reliable_receiver = ReliableReceiver(
+            self._deliver_reliable, self._send_ack, log_cb=self._log_transport_event
+        )
 
         # once we expose a setter in ReliableReceiver, hook it up safely:
         if hasattr(self.reliable_receiver, "set_gap_deadline_fn"):
             try:
-                self.reliable_receiver.set_gap_deadline_fn(self._compute_dynamic_t)
+                # Respect current timer mode for the receiver's gap timer.
+                if getattr(self, "t_mode", "dynamic") == "static":
+                    def _static_gap_t(_urg=0, _self=self):
+                        return int(getattr(_self, "t_static_ms", 200))
+                    self.reliable_receiver.set_gap_deadline_fn(_static_gap_t)
+                else:
+                    # dynamic uses the same EWMA-based function as the sender
+                    self.reliable_receiver.set_gap_deadline_fn(self._compute_dynamic_t)
             except Exception:
                 pass  # stay compatible even if method exists but signature differs
 
@@ -115,6 +133,32 @@ class GameNetAPI:
         self._tx_rel = 0
         self._tx_unrel = 0
         self._rx_ack = 0
+    
+    # ---------------- RTT update (single source, public facing) ----------------
+    # EWMA update owned here (called when an ACK sample arrives)
+    def update_rtt(self, sample_ms: float) -> None:
+        x = float(sample_ms)
+
+        if sample_ms < 1.0:
+            x = 1.0  # clamp very low samples
+            
+        alpha, beta = 0.125, 0.25 # 1/8 and 1/4
+        if self.srtt is None or self.rttvar is None:
+            self.srtt = x
+            self.rttvar = x / 2.0
+        else:
+            err = x - self.srtt
+            self.srtt += alpha * err
+            self.rttvar = (1.0 - beta) * self.rttvar + beta * abs(err)
+        if self.verbose:
+            print(f"[RTT/update] sample={x:.1f}ms srtt={self.srtt:.1f} rttvar={self.rttvar:.1f}")
+
+    # canonical RTO from the same srtt/rttvar
+    def get_rto_ms(self) -> int:
+        if self.srtt is None or self.rttvar is None:
+            return 200
+        rto = self.srtt + self._k_rto * self.rttvar
+        return int(max(self._rto_min, min(self._rto_max, rto)))
 
     # ---------------- Public Facing API ----------------
 
@@ -131,13 +175,21 @@ class GameNetAPI:
     def set_peer(self, peer: Tuple[str,int]) -> None:
         # Explicitly set the remote peer (used for send & ACK).
         self.peer = peer
-        if self.reliable_sender is None:
-            self.reliable_sender = ReliableSender(self.sock, self.peer)
+        if self.peer and self.reliable_sender is None:
+            self.reliable_sender = ReliableSender(
+                self.sock, self.peer, self.get_rto_ms, # ReliableSender must accept get_rto_ms
+                log_retx_cb=self._log_tx_retransmit,
+                log_expire_cb=self._log_tx_expire
+            )
 
     def start(self) -> None:
         # Start background RX thread (and reliable sender if we have a peer).
         if self.peer and self.reliable_sender is None:
-            self.reliable_sender = ReliableSender(self.sock, self.peer)
+            self.reliable_sender = ReliableSender(
+                self.sock, self.peer, self.get_rto_ms, # ReliableSender must accept get_rto_ms
+                log_retx_cb=self._log_tx_retransmit,
+                log_expire_cb=self._log_tx_expire
+            )
         if self.reliable_sender:
             self.reliable_sender.start()
         self._running = True
@@ -161,18 +213,41 @@ class GameNetAPI:
         assert self.peer is not None, "Peer not set. Call set_peer((host,port)) or pass peer in GameNetAPI()."
         if reliable:
             if self.reliable_sender is None:
-                self.reliable_sender = ReliableSender(self.sock, self.peer)
+                self.reliable_sender = ReliableSender(
+                    self.sock, self.peer, self.get_rto_ms, # ReliableSender must accept get_rto_ms
+                    log_retx_cb=self._log_tx_retransmit,
+                    log_expire_cb=self._log_tx_expire
+                )
                 self.reliable_sender.start()
-            
-            # compute adaptive per-packet deadline
-            deadline_ms = self._compute_dynamic_t(urgency_ms)
+        
+            # compute per-packet deadline 't' based on mode (for EVERY send)
+            try:
+                t = self._compute_dynamic_t(urgency_ms) if self.t_mode == "dynamic" else self.t_static_ms
+            except Exception:
+                t = int(self._compute_dynamic_t(urgency_ms))
+            # defensive clamp
+            t = max(self.t_min_ms, min(self.t_max_ms, t))
 
             # Pass deadline to sender
-            seq = self.reliable_sender.send(payload, urgency_ms=urgency_ms, deadline_ms=deadline_ms)
+            seq = self.reliable_sender.send(
+                payload,
+                urgency_ms=urgency_ms,
+                deadline_ms=t
+            )
+
+            if self.verbose:
+                # Default when no sample
+                srtt_disp = f"{self.srtt:.1f}" if self.srtt is not None else "NA"
+                rttv_disp = f"{self.rttvar:.1f}" if self.rttvar is not None else "NA"
+                try:
+                    print(f"[REL/send] seq={seq} mode={self.t_mode} t={t}ms srtt={srtt_disp} rttvar={rttv_disp}")
+                except Exception:
+                    pass
+
 
             self._tx_rel += 1
             if self.logger:
-                self.logger.write([now_ms(), "TX", "REL", seq, now_ms(), "", 0, "send", "", len(payload)])
+                self.logger.write([now_ms(), "TX", "REL", seq, now_ms(), "", 0, "send", t, len(payload)])
         else:
             pkt = pack_header(CHAN_UNRELIABLE, 0, now_ms()) + payload
             self.sock.sendto(pkt, self.peer)
@@ -211,25 +286,28 @@ class GameNetAPI:
         """
         Adaptive 't' (skip-after-t / retransmit deadline proxy) per packet.
 
-        Formula: t = clamp( SRTT + k*RTTVAR + urgency, [t_min, t_max] )
-        - SRTT/RTTVAR self0generated (updated using ACK samples).
+        Formula: t = clamp( self.srtt + k*self.rttvar + urgency, [t_min, t_max] )
+        - SRTT/RTTVAR come from self.rtt (updated using ACK samples).
         - urgency is a small non-negative hint capped to self.max_urgency_ms.
         - Fallback when we don't have SRTT yet: assume the default base (200ms) and rttvar ~ base/2.
         """
         # Pull current estimates
-        srtt = self.srtt
-        rttvar = self.rttvar
+        if self.srtt is None or self.rttvar is None:
+            return int(200)
+        else:
+            srtt = self.srtt
+            rttvar = self.rttvar
 
-        if srtt is None or rttvar is None:
-            srtt, rttvar = 200.0, 100.0 # use defaults at the start
+        #if srtt is None or rttvar is None:
+        #    srtt, rttvar = 200.0, 100.0 # use defaults at the start
 
         k = self.k_rttvar
         u = max(0, min(int(urgency_ms), self.max_urgency_ms))
 
         # from formula 
-        est = float(srtt) + k * float(rttvar) + float(u)
-        est = max(self.t_min_ms, min(est, self.t_max_ms))
-        return int(est)
+        t = float(srtt) + k * float(rttvar) + float(u)
+        t = max(self.t_min_ms, min(t, self.t_max_ms))
+        return int(t)
 
     def _deliver_reliable(self, app_payload: bytes) -> None:
         if self.onReliable:
@@ -291,16 +369,22 @@ class GameNetAPI:
 
                 # Only meaningful for the sender side
                 if self.reliable_sender is not None:
+                    # Payload carries echoed original send timestamp (uint32)
+                    echo_ts = self.unpack_ack(payload)
+                    now32 = now_ms() & 0xFFFFFFFF
+                    rtt_ms = float((now32 - (echo_ts & 0xFFFFFFFF)) & 0xFFFFFFFF)
+                    # single-source update
                     try:
-                        echo_ts = self.unpack_ack(payload)
+                        self.update_rtt(rtt_ms)
                     except Exception:
-                        continue
-                    now32   = now_ms() & 0xFFFFFFFF
-                    rtt_ms  = (now32 - (echo_ts & 0xFFFFFFFF)) & 0xFFFFFFFF
+                        pass
 
                     self.reliable_sender.on_ack(seq, echo_ts)
                     if self.logger:
-                        self.logger.write([now_ms(), "RX", "ACK", seq, echo_ts, rtt_ms, "", "ack", "", len(payload)])
+                        self.logger.write([
+                            now_ms(), "RX", "ACK", seq,
+                            echo_ts, rtt_ms, "", "ack", "", len(payload)
+                        ])
                     if self.onAck:
                         self.onAck(seq, rtt_ms)
             # else: ignore unknown channel
@@ -313,5 +397,25 @@ class GameNetAPI:
         # Optionally mirror to console
         if self.verbose:
             print(f"[REL/{ev}] seq={seq}")
+
+    def _log_tx_retransmit(self, seq: int, send_ts_ms: int, retries: int, payload_len: int) -> None:
+        """
+        Called from ReliableSender._loop() on every retransmission.
+        Writes a single CSV row to sender log.
+        """
+        if self.logger:
+            now = now_ms()
+            # CSV: ts, dir, channel, seq, send_ts_ms, rtt_ms, retries, event, deadline_t_ms, len_bytes
+            self.logger.write([now, "TX", "REL", seq, send_ts_ms, "", retries, "retransmit", "", payload_len])
+        if self.verbose:
+            print(f"[REL/retransmit] seq={seq} retries={retries}")
+        
+    def _log_tx_expire(self, seq: int, now_ts_ms: int, retries: int, payload_len: int, deadline_ms: Optional[int]) -> None:
+        if self.logger:
+            # ts, dir, channel, seq, send_ts_ms, rtt_ms, retries, event, deadline_t_ms, len_bytes
+            self.logger.write([now_ts_ms, "TX", "REL", seq, now_ts_ms, "", retries, "expire", (deadline_ms or ""), payload_len])
+        if self.verbose:
+            print(f"[REL/expire] seq={seq} retries={retries} deadline={deadline_ms}")
+
 
 
