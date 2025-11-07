@@ -49,13 +49,7 @@ class ReliableSender:
             self._thr.join(timeout=0.2)
 
     def send(self, payload: bytes, urgency_ms: int = 0, deadline_ms: Optional[int] = None) -> int:
-        """
-        - if deadline_ms is provided, attach/store it with this seq in a dict
-          and use it as:
-            * retransmission cutoff (do not keep retrying past deadline)
-            * packet expiry (if deadline passes before ACK, drop and mark skipped)
-        - else fall back to previous default (e.g. 200ms)
-        """
+
         # Allocates seq, sends once, stores state for retransmit.
         with self._lock:
             seq = self._seq & 0xFFFF

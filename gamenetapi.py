@@ -2,37 +2,7 @@
 """
 CS3103 Group 10 - GameNetAPI
 
-H-UDP facade for reliable/unreliable channels
-=========================
-
-Purpose
--------
-A small facade around the H-UDP transport:
-- One UDP socket with two logical channels (reliable / unreliable)
-- Explicit header: ChannelType (1B) | SeqNo (2B) | Timestamp (4B)
-- Reliable channel uses Selective-Repeat flavor with retransmissions
-  and **skip-after-t** semantics enforced at the receiver
-- **Adaptive-t**: t_deadline is computed per packet by the sender
-  (SRTT + k*RTTVAR + urgency), kept to [120..300] ms.
-- ACKs are sent over a control channel (ChannelType=2) and used to
-  update SRTT/RTTVAR for the sender.
-
-Key API
--------
-- set_callbacks(onReliable: (bytes)->None, onUnreliable: (bytes)->None)
-- start() / stop()
-- send(payload: bytes, reliable: bool = True, urgency_ms: int = 0)
-- set_peer((host, port))  # optional after construction
-- stats() -> dict         # counters to print in demo
-
-Extra Details
------
-- The ACK path echoes the original sender timestamp so the sender can
-  take an RTT sample even after retransmissions.
-- The receiver enforces "skip-after-t" using a gap-timer: 
-  when out-of-order packets exist past the expected seq, we
-  skip the missing one if the oldest buffered packet has aged beyond
-  a minimal deadline proxy.
+H-UDP with reliable/unreliable channels
 
 """
 import socket
