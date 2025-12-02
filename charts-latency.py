@@ -3,7 +3,6 @@ CS3103 Group 10 - Log Analysis Script
 """
 
 # The script reads sender/receiver log files and plots latency, jitter and throughput.
-# It’s okay if the receiver log is empty (RTT is only in sender logs for now).
 # Requirements : matplotlib, pandas, numpy
 
 import os
@@ -11,7 +10,7 @@ import sys
 import csv
 import argparse
 import math
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import matplotlib
 matplotlib.use("Agg")
@@ -229,6 +228,51 @@ def describe_stats(name, vals):
            f"median={np.median(a):.3f} ms  p95={p95:.3f} ms  max={a.max():.3f} ms")
     log(msg)
 
+def analyze_duplicates(receiver_csv_path: str) -> Counter:
+    dup_counter = Counter()
+    if not receiver_csv_path:
+        return dup_counter
+        
+    try:
+        with open(receiver_csv_path, newline="") as f:
+            r = csv.DictReader(f)
+            for row in r:
+                if (row.get("action") or "").lower() == "dup":
+                    try:
+                        dup_counter[int(float(row.get("seq", -1)))] += 1
+                    except ValueError:
+                        pass  
+    except FileNotFoundError:
+        print(f"Warning: Receiver file {receiver_csv_path} not found.")
+    except Exception as e:
+        print(f"Error analyzing {receiver_csv_path}: {e}")
+        
+    return dup_counter
+
+def plot_duplicate_comparison(data_a: Counter, label_a: str, data_b: Counter, label_b: str, output_dir: str):
+    output_path = os.path.join(output_dir, "duplicates_compare.png")
+    
+    total_dups_a = sum(data_a.values())
+    total_dups_b = sum(data_b.values())
+
+    labels = [label_a or "A", label_b or "B"]
+    totals = [total_dups_a, total_dups_b]
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    bars = ax.bar(labels, totals, color=['#1f77b4', '#ff7f0e'])
+    ax.set_ylabel('Total duplicate packets received')
+    ax.set_title('Duplicate Packet Comparison')
+    ax.grid(True, linestyle='--', alpha=0.6, axis='y')
+    ax.bar_label(bars, label_type='center')
+
+    try:
+        plt.savefig(output_path)
+        print(f"Duplicate chart saved to {output_path}")
+    except Exception as e:
+        print(f"Error saving duplicate chart: {e}")
+    plt.close(fig)
+
 def main():
     ap = argparse.ArgumentParser(description="Latency/Jitter/Throughput charts (single or A vs B)")
     ap.add_argument("--sender", type=str, default=None, help="single run: sender CSV/TXT")
@@ -237,6 +281,9 @@ def main():
     ap.add_argument("--sender-b", type=str, help="second run: sender CSV/TXT")
     ap.add_argument("--label-a", type=str, default="t=200ms")
     ap.add_argument("--label-b", type=str, default="dynamic t")
+    ap.add_argument('--receiver-a', type=str, help='Path to receiver.csv file for A')
+    ap.add_argument('--receiver-b', type=str, help='(Optional) Path to receiver.csv file for B')
+
     args = ap.parse_args()
 
     compare_mode = bool(args.sender_a and args.sender_b)
@@ -275,9 +322,29 @@ def main():
         save_throughput(dataA["time_all"], fname="throughput_A.png")
         save_throughput(dataB["time_all"], fname="throughput_B.png")
 
-        log("[done] compare charts saved in 'plots/'")
-        return
+        output_plot_dir = "plots" #
+        os.makedirs(output_plot_dir, exist_ok=True) 
+        
+        if args.receiver_a or args.receiver_b:
+            print("Analyzing duplicates...")
 
+            #
+            dup_data_a = analyze_duplicates(args.receiver_a)
+            dup_data_b = analyze_duplicates(args.receiver_b) if args.receiver_b else Counter()
+
+            plot_duplicate_comparison(
+                dup_data_a,
+                args.label_a or "A",
+                dup_data_b,
+                args.label_b or "B",
+                output_plot_dir  
+            )
+        else:
+            print("No --receiver-a or --receiver-b file provided, skipping duplicate analysis.")
+
+        log("[done] compare charts saved in 'plots/'")
+        return 
+    
     sender_path = args.sender or "sender.txt"
     sender_rows = load_text_log(sender_path)
     receiver_rows = load_text_log(args.receiver)
